@@ -20,3 +20,4 @@ BRANCH_STATUS_AND_TODO.md
 /.test_tmp/.env
 *.key
 secrets.json
+/.test_tmp

@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.document_pipeline.schemas import AssetRef, ChunkSummary, DocumentMap, DocumentMetadata, EvidenceChunk
-from src.document_pipeline.schemas import ExtractedBlock, ExtractedDocument, OutputPlan, Provenance, SectionSummary
-from src.document_pipeline.schemas import SelectedEvidence, SourceInfo
+from src.document_pipeline.schemas import AssetRef, DocumentMap, DocumentMetadata, EvidenceChunk
+from src.document_pipeline.schemas import ExtractedBlock, ExtractedDocument, Provenance
+from src.document_pipeline.schemas import SourceInfo
 
 
 def pipeline_output_dir(working_folder: Path) -> Path:
@@ -36,36 +36,6 @@ def save_document_map(working_folder: Path, doc_map: DocumentMap) -> Path:
 def save_chunks(working_folder: Path, chunks: list[EvidenceChunk]) -> Path:
     path = pipeline_output_dir(working_folder) / "chunks.json"
     _write_json(path, {"chunks": [chunk.to_dict() for chunk in chunks]})
-    return path
-
-
-def save_output_plan(working_folder: Path, output_plan: OutputPlan) -> Path:
-    path = pipeline_output_dir(working_folder) / "output_plan.json"
-    _write_json(path, output_plan.to_dict())
-    return path
-
-
-def save_selected_evidence(working_folder: Path, selected_evidence: SelectedEvidence) -> Path:
-    path = pipeline_output_dir(working_folder) / "selected_evidence.json"
-    _write_json(path, selected_evidence.to_dict())
-    return path
-
-
-def save_chunk_summaries(working_folder: Path, summaries: list[ChunkSummary]) -> Path:
-    path = pipeline_output_dir(working_folder) / "llm_chunk_summaries.json"
-    _write_json(path, {"chunk_summaries": [summary.to_dict() for summary in summaries]})
-    return path
-
-
-def save_section_summaries(working_folder: Path, summaries: list[SectionSummary]) -> Path:
-    path = pipeline_output_dir(working_folder) / "llm_section_summaries.json"
-    _write_json(path, {"section_summaries": [summary.to_dict() for summary in summaries]})
-    return path
-
-
-def save_report_attempts(working_folder: Path, attempts: list[dict[str, Any]]) -> Path:
-    path = pipeline_output_dir(working_folder) / "llm_report_attempts.json"
-    _write_json(path, {"attempts": list(attempts)})
     return path
 
 
@@ -116,21 +86,6 @@ def load_chunks_payload(working_folder: Path) -> dict[str, Any]:
 def load_manifest_payload(working_folder: Path) -> dict[str, Any]:
     path = pipeline_output_dir(working_folder) / "extraction_manifest.json"
     return _read_json_object(path, "extraction_manifest.json")
-
-
-def load_output_plan_payload(working_folder: Path) -> dict[str, Any]:
-    path = pipeline_output_dir(working_folder) / "output_plan.json"
-    return _read_json_object(path, "output_plan.json")
-
-
-def load_selected_evidence_payload(working_folder: Path) -> dict[str, Any]:
-    path = pipeline_output_dir(working_folder) / "selected_evidence.json"
-    return _read_json_object(path, "selected_evidence.json")
-
-
-def load_report_attempts_payload(working_folder: Path) -> dict[str, Any]:
-    path = pipeline_output_dir(working_folder) / "llm_report_attempts.json"
-    return _read_json_object(path, "llm_report_attempts.json")
 
 
 def _write_json(path: Path, payload: Any) -> None:

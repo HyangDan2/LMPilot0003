@@ -208,75 +208,31 @@ python run.py --config config.yaml
   <attached-folder>/llm_result/document_pipeline/
   ```
 
-  Main report command:
-
-  ```text
-  /generate_report [--no-llm] [--fresh] [--generate-detail true|false] [--llm-input-chars N] [query...]
-  ```
-
   Examples:
 
   ```text
-  /summarize_file design_review.pptx
-  /summarize_file test_results.xlsx summarize risks and quantitative results
-  /generate_report summarize all output in this folder
-  /generate_report summarize about project risks
-  /generate_report --no-llm summarize briefly
-  /summarize_file --generate-detail true design_review.pptx
+  /extract_single_doc design_review.pptx
+  /extract_docs
+  /build_doc_map
+  /generate_markdown
   ```
 
-  For quick inspection of one file, use:
+  Available document-pipeline tools:
 
   ```text
-  /summarize_file <path> [--no-llm] [--generate-detail true|false] [--llm-input-chars N] [query...]
+  /extract_single_doc <path>
+  /extract_docs
+  /build_doc_map
+  /generate_markdown
+  /workspace_status
   ```
 
-  `/summarize_file` extracts only the selected file and saves isolated artifacts under:
+  `/extract_single_doc` extracts one supported file and saves a per-document JSON artifact.
+  `/extract_docs` scans the attached folder and saves extracted document JSON plus a manifest.
+  `/build_doc_map` builds a structural map from the latest extracted documents.
+  `/generate_markdown` writes a deterministic markdown report from extracted evidence without any final LLM report-writing stage.
 
-  ```text
-  <attached-folder>/llm_result/document_pipeline/file_summaries/<document_id>/
-  ```
-
-  The generated single-file summary uses three top-level sections:
-
-  ```text
-  Summary
-  Source Details
-  Open Issues and Next Actions
-  ```
-
-  The `Summary` section may use the same detailed engineering subsections as `/generate_report` when evidence supports them.
-  Saved `generated_summary.md` files also place each normal paragraph sentence on its own line.
-
-  Use `--generate-detail true` with `/summarize_file` or `/generate_report` to generate optional LLM summaries for every page, slide, sheet, or file-level item. Detail summaries are batched for speed, but chat progress prints every current detail item as it is processed and completed. The summaries are saved as separate `detail_summaries.json` and `detail_summaries.md` artifacts and are not automatically added to the final report prompt. If no LLM client is configured, the app saves local extractive detail summaries with a fallback reason.
-
-  `/generate_report` runs the complete engineering-report pipeline. You do not need to run `/extract_docs` or `/build_doc_map` first. The command scans the attached folder, reuses unchanged extraction artifacts when possible, then performs document mapping, output planning, representative evidence selection, optional local ranked evidence grouping for large documents, and one final LLM Markdown call. Use `--fresh` to force full re-extraction. Progress updates and per-stage timings stream into the chat while the tool runs; when the configured backend supports streaming, the final Markdown report streams into the Tool block while also being accumulated and saved as `generated_report.md`. The free-form text after the command becomes the report query/focus. If the configured LLM is unavailable, the command saves a deterministic fallback Markdown report instead of failing the whole pipeline.
-
-  The generated engineering report uses three top-level sections:
-
-  ```text
-  Summary
-  Source Documents
-  Open Issues and Next Actions
-  ```
-
-  The `Summary` section is intentionally grounded in the selected evidence. When evidence supports it, `Summary` may include these subsections:
-
-  ```text
-  What the Document Explicitly Describes
-  Main Methods or Components Explicitly Mentioned
-  Quantitative Values Explicitly Present
-  Explicit Limitations or Constraints
-  Unclear or Not Specified in Selected Evidence
-  ```
-
-  Unsupported categories should be stated as not explicitly present in the selected evidence rather than filled with inferred architecture, risks, or recommendations.
-
-  Large documents automatically use local ranked evidence grouping. Chat progress shows whether the run uses `one-shot` or `ranked-groups` mode, raw group count, selected top group count, representative evidence count, and final prompt size. The app does not call the LLM during grouping; the LLM is used only for the final report.
-
-  Saved `generated_report.md` files place each normal paragraph sentence on its own line. Headings, tables, bullets, code fences, and blank lines are preserved.
-
-  Slash tools run in background workers so the GUI stays responsive. A session can run only one slash tool at a time, but other sessions can run their own slash tools while `/generate_report` is active. Stop cancels the currently selected session's running slash tool or normal generation. Document-pipeline artifacts are still saved to shared paths under the attached folder, so simultaneous report commands against the same folder use last-writer-wins files.
+  Slash tools run in background workers so the GUI stays responsive. A session can run only one slash tool at a time, and Stop cancels the currently selected session's running slash tool or normal generation.
 
   Generated document-pipeline artifacts:
 
@@ -284,23 +240,9 @@ python run.py --config config.yaml
   extracted_documents.json
   extraction_manifest.json
   document_map.json
-  output_plan.json
-  selected_evidence.json
-  evidence_groups.json
-  selected_evidence_groups.json
-  group_summaries.json
-  recursive_summary_levels.json
-  final_prompt_preview.txt
-  detail_summaries.json
-  detail_summaries.md
-  llm_report_attempts.json
   generated_report.md
-  file_summaries/<document_id>/detail_summaries.json
-  file_summaries/<document_id>/detail_summaries.md
-  file_summaries/<document_id>/generated_summary.md
+  documents/<document_id>.json
   ```
-
-  The LLM orchestration sends representative selected evidence and, for large documents, top-ranked evidence groups within `--llm-input-chars`. Lower `--llm-input-chars` for smaller local models.
 
   During normal chat, the model can request previously generated artifacts from the attached folder. The app safely executes these requests only under `<attached-folder>/llm_result/`, then sends the artifact content back to the model for a follow-up answer. Supported tags:
 
@@ -323,7 +265,7 @@ python run.py --config config.yaml
   ```text
   /help
   /workspace_status
-  /summarize_file <path>
+  /extract_single_doc <path>
   /extract_docs
   /build_doc_map
   /generate_markdown
@@ -352,7 +294,7 @@ src/utils              path, IO, and logging helpers
 src/planner            adaptive PPTX planning pipeline
 src/renderer           deterministic PPTX rendering
 src/transform          knowledge-map construction
-src/document_pipeline  extracted-document schema, evidence selection, and report generation
+src/document_pipeline  extracted-document schema, deterministic markdown, and storage helpers
 src/slash_tools        prompt-box local commands
 src/gui                PySide6 GUI, sessions, database, and LLM client
 src/tools              legacy local tools
