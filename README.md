@@ -152,42 +152,6 @@ python run.py --config config.yaml
 
   The prompt builder uses a recent-message window instead of reprocessing the entire session on every send. The database also includes a session summary table, and the codebase includes a vector-store foundation for future RAG-style retrieval.
 
-* **Terminal PPTX rendering pipeline**
-
-  The terminal pipeline scans a working folder recursively, parses supported documents, writes normalized JSON, creates a knowledge map, asks an OpenAI-compatible LLM for a strict JSON slide plan, and renders a deterministic PowerPoint file.
-
-  Supported source files:
-
-  ```text
-  .pptx .docx .xlsx .pdf
-  ```
-
-  Install the document pipeline dependencies with:
-
-  ```bash
-  pip install -r requirements.txt
-  ```
-
-  Run the pipeline from a terminal:
-
-  ```bash
-  python -m src.main --working-dir data/working --output-dir data/outputs "Create a 7-slide executive summary"
-  ```
-
-  Generated files:
-
-  ```text
-  <normalized-dir>/<document-id>.json
-  <normalized-dir>/knowledge_map.md
-  <normalized-dir>/knowledge_map.json
-  <normalized-dir>/planner_chunk_summary.json
-  <normalized-dir>/planner_attempts.json
-  <output-dir>/planner_output.json
-  <output-dir>/<plan-title>.pptx
-  ```
-
-  For terminal usage, settings come from command-line overrides or environment variables such as `WORKING_DIR`, `NORMALIZED_DIR`, `OUTPUT_DIR`, `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL`. Planning is adaptive: the app summarizes the knowledge map in chunks, recursively splits failed chunks into smaller work, retries without JSON response-format enforcement when needed, and can write local fallback summaries for chunks that still fail. Tune `planner_chunk_chars`, `planner_min_chunk_chars`, `planner_max_retries`, `planner_intermediate_max_tokens`, `planner_final_max_tokens`, `planner_allow_response_format_retry`, and `planner_enable_local_fallback` for smaller local backends.
-
 * **Attachments**
 
   Use **Attach Folder** in the left sidebar under **Sessions** to select a workspace folder. The attachment list shows supported files directly inside that selected folder, including `.pptx`; subfolders are not scanned. Selecting a new folder replaces the previous attachment list. Files are not automatically included in prompts. Double-click an attached file to insert its filename into the input box. Use **Clear Attachments** to clear the full list.
@@ -289,15 +253,11 @@ The code is consolidated under `src/`; the old top-level `app/` package has been
 
 ```text
 src/ingestion          deterministic file scanning and parsers
-src/models             shared parser/planner dataclasses
+src/models             shared extraction dataclasses
 src/utils              path, IO, and logging helpers
-src/planner            adaptive PPTX planning pipeline
-src/renderer           deterministic PPTX rendering
-src/transform          knowledge-map construction
 src/document_pipeline  extracted-document schema, deterministic markdown, and storage helpers
 src/slash_tools        prompt-box local commands
 src/gui                PySide6 GUI, sessions, database, and LLM client
-src/tools              legacy local tools
 ```
 
 ```

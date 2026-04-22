@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 
-def get_logger(name: str = "render_pptx") -> logging.Logger:
+def get_logger(name: str = "llm_communicator") -> logging.Logger:
     """Return a configured lightweight logger."""
 
     logger = logging.getLogger(name)
