@@ -1,0 +1,35 @@
+backend: "openai"
+openai_base_url: ""
+openai_api_key: ""
+openai_model: ""
+openai_embedding_model: ""
+connection_settings_path: "openai_settings.json"
+system_prompt: "You are a helpful assistant."
+temperature: 0.7
+n_predict: 2048
+threads: 4
+ctx_size: 128000
+extra_args: []
+startup_timeout: 300
+response_timeout: 300
+planner_chunk_chars: 6000
+planner_min_chunk_chars: 800
+planner_max_retries: 3
+planner_intermediate_max_tokens: 1024
+planner_final_max_tokens: 2048
+planner_allow_response_format_retry: true
+planner_enable_local_fallback: true
+db_path: "./data/app.db"
+window_title: "LLM Communicator(OpenAI Compatible)"
+window_width: 1000
+window_height: 720
+response_token_reserve: 256
+max_prompt_chars: 12000
+recent_message_limit: 40
+rag_top_k: 5
+rag_min_score: 0.2
+memory_context_char_limit: 4000
+
+# Legacy llama-cli backend settings are only used when backend: "cli".
+llama_cli_path: "/path/to/your/llama-cli"
+model_path: "/path/to/your/model.gguf"

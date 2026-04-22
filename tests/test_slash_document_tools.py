@@ -1,0 +1,259 @@
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from src.document_pipeline.schemas import DocumentMetadata, ExtractedBlock, ExtractedDocument, Provenance, SourceInfo
+from src.slash_tools import SlashToolContext, run_slash_command
+
+
+class SlashDocumentToolsTests(unittest.TestCase):
+    def test_help_lists_document_pipeline_tools_and_saved_outputs(self) -> None:
+        result = run_slash_command("/help", None, SlashToolContext())
+
+        assert result is not None
+        self.assertIn("/extract_docs", result.text)
+        self.assertIn("/workspace_status", result.text)
+        self.assertIn("/generate_markdown", result.text)
+        self.assertIn("/generate_report", result.text)
+        self.assertIn("/summarize_file", result.text)
+        self.assertIn("llm_result/document_pipeline/extracted_documents.json", result.text)
+        self.assertIn("selected_evidence.json", result.text)
+        self.assertIn("detail_summaries.json", result.text)
+        self.assertIn("What the Document Explicitly Describes", result.text)
+        self.assertIn("file_summaries", result.text)
+        self.assertNotIn("llm_chunk_summaries.json", result.text)
+
+    def test_non_slash_prompt_is_not_handled(self) -> None:
+        self.assertIsNone(run_slash_command("hello", None, SlashToolContext()))
+
+    def test_unknown_slash_command_returns_helpful_error(self) -> None:
+        result = run_slash_command("/missing", None, SlashToolContext())
+
+        assert result is not None
+        self.assertIn("unknown slash command", result.text)
+        self.assertIn("/help", result.text)
+
+    def test_path_traversal_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            result = run_slash_command("/read_file_info ../secret.txt", root, SlashToolContext())
+
+        assert result is not None
+        self.assertIn("outside the attached working folder", result.text)
+
+    def test_detect_file_type_and_read_file_info_use_attached_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            file_path = root / "report.pptx"
+            file_path.write_bytes(b"sample")
+            context = SlashToolContext()
+
+            detected = run_slash_command("/detect_file_type report.pptx", root, context)
+            info = run_slash_command("/read_file_info report.pptx", root, context)
+
+        assert detected is not None
+        assert info is not None
+        self.assertIn("family: pptx", detected.text)
+        self.assertIn("size_bytes: 6", info.text)
+
+    def test_extract_docs_auto_saves_empty_folder_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            context = SlashToolContext()
+
+            result = run_slash_command("/extract_docs", root, context)
+
+            extracted_path = root / "llm_result" / "document_pipeline" / "extracted_documents.json"
+            manifest_path = root / "llm_result" / "document_pipeline" / "extraction_manifest.json"
+            self.assertTrue(extracted_path.exists())
+            self.assertTrue(manifest_path.exists())
+            self.assertEqual(json.loads(extracted_path.read_text(encoding="utf-8")), {"documents": []})
+
+        assert result is not None
+        self.assertIn("Extracted 0 document(s)", result.text)
+
+    def test_build_doc_map_auto_saves_from_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            context = SlashToolContext(working_folder=root, documents=[_sample_document(root)])
+
+            doc_map_result = run_slash_command("/build_doc_map", root, context)
+
+            self.assertTrue((root / "llm_result" / "document_pipeline" / "document_map.json").exists())
+
+        assert doc_map_result is not None
+        self.assertIn("Built document map", doc_map_result.text)
+
+    def test_workspace_status_reports_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            context = SlashToolContext()
+            run_slash_command("/extract_docs", root, context)
+
+            result = run_slash_command("/workspace_status", root, context)
+
+        assert result is not None
+        self.assertIn("Workspace status", result.text)
+        self.assertIn("extracted_documents.json: found", result.text)
+
+    def test_generate_markdown_auto_saves_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            context = SlashToolContext(working_folder=root, documents=[_sample_document(root)])
+
+            result = run_slash_command("/generate_markdown", root, context)
+
+            report_path = root / "llm_result" / "document_pipeline" / "generated_report.md"
+            self.assertTrue(report_path.exists())
+            self.assertIn("# Generated Document Report", report_path.read_text(encoding="utf-8"))
+
+        assert result is not None
+        self.assertIn("Generated markdown report", result.text)
+        self.assertIn("generated_report.md", result.text)
+
+    def test_generate_report_auto_saves_plan_and_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            context = SlashToolContext()
+
+            result = run_slash_command("/generate_report summarize about demo summary", root, context)
+
+            extracted_path = root / "llm_result" / "document_pipeline" / "extracted_documents.json"
+            manifest_path = root / "llm_result" / "document_pipeline" / "extraction_manifest.json"
+            doc_map_path = root / "llm_result" / "document_pipeline" / "document_map.json"
+            plan_path = root / "llm_result" / "document_pipeline" / "output_plan.json"
+            selected_evidence_path = root / "llm_result" / "document_pipeline" / "selected_evidence.json"
+            attempts_path = root / "llm_result" / "document_pipeline" / "llm_report_attempts.json"
+            report_path = root / "llm_result" / "document_pipeline" / "generated_report.md"
+            self.assertTrue(extracted_path.exists())
+            self.assertTrue(manifest_path.exists())
+            self.assertTrue(doc_map_path.exists())
+            self.assertTrue(plan_path.exists())
+            self.assertTrue(selected_evidence_path.exists())
+            self.assertTrue(attempts_path.exists())
+            self.assertTrue(report_path.exists())
+            self.assertEqual(json.loads(plan_path.read_text(encoding="utf-8"))["goal"], "summarize about demo summary")
+            self.assertEqual(
+                [section["title"] for section in json.loads(plan_path.read_text(encoding="utf-8"))["sections"]],
+                ["Summary", "Source Documents", "Open Issues and Next Actions"],
+            )
+            plan_payload = json.loads(plan_path.read_text(encoding="utf-8"))
+            self.assertEqual(plan_payload["sections"][0]["max_chars"], 20480)
+            self.assertEqual(plan_payload["sections"][1]["max_chars"], 200)
+            self.assertEqual(plan_payload["sections"][2]["max_chars"], 200)
+            self.assertIsNotNone(context.doc_map)
+
+        assert result is not None
+        self.assertIn("Generated report", result.text)
+        self.assertIn("Automatically ran:", result.text)
+        self.assertIn("- extract_docs", result.text)
+        self.assertIn("- build_doc_map", result.text)
+        self.assertIn("- select_evidence_blocks", result.text)
+        self.assertIn("- write_output_plan", result.text)
+        self.assertIn("llm_used: no", result.text)
+        self.assertIn("extraction_cache_used: no", result.text)
+        self.assertIn("Timings:", result.text)
+        self.assertIn("output_plan.json", result.text)
+        self.assertIn("generated_report.md", result.text)
+
+    def test_generate_report_fresh_flag_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            context = SlashToolContext()
+
+            result = run_slash_command("/generate_report --fresh summarize briefly", root, context)
+
+        assert result is not None
+        self.assertIn("Generated report", result.text)
+
+    def test_summarize_file_rejects_path_traversal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            result = run_slash_command("/summarize_file ../outside.pptx", root, SlashToolContext())
+
+        assert result is not None
+        self.assertIn("outside the attached working folder", result.text)
+
+    def test_summarize_file_saves_file_summary_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "report.pptx"
+            source.write_bytes(b"sample")
+            document = _sample_document(root)
+            output_plan = SimpleNamespace(goal="summarize risks")
+            selected_evidence = SimpleNamespace(blocks=[document.blocks[0]])
+            fake_result = SimpleNamespace(
+                document=document,
+                doc_map=SimpleNamespace(blocks=[{}]),
+                output_plan=output_plan,
+                selected_evidence=selected_evidence,
+                markdown="# File Summary: report.pptx\n",
+                used_llm=False,
+                fallback_reason="LLM client is not configured.",
+                timings={"total": 0.01},
+                mode="one-shot",
+                evidence_group_count=0,
+                selected_evidence_group_count=0,
+                recursive_merge_levels=0,
+                final_prompt_chars=0,
+                detail_summary_count=0,
+                detail_used_llm=False,
+                detail_fallback_reason="",
+                saved_files=[
+                    root
+                    / "llm_result"
+                    / "document_pipeline"
+                    / "file_summaries"
+                    / "doc_report"
+                    / "generated_summary.md"
+                ],
+            )
+
+            with patch("src.slash_tools.document_pipeline.summarize_file_pipeline", return_value=fake_result) as summarized:
+                result = run_slash_command("/summarize_file --generate-detail true report.pptx summarize risks", root, SlashToolContext())
+
+        assert result is not None
+        summarized.assert_called_once()
+        self.assertIn("Generated file summary", result.text)
+        self.assertIn("file: report.pptx", result.text)
+        self.assertIn("llm_used: no", result.text)
+        self.assertIn("detail_summaries: 0", result.text)
+        self.assertIn("file_summaries/doc_report/generated_summary.md", result.text)
+        self.assertTrue(summarized.call_args.kwargs["generate_detail"])
+
+
+def _sample_document(root: Path) -> ExtractedDocument:
+    provenance = Provenance(source_path=str(root / "report.pptx"), location_type="slide", slide=1)
+    return ExtractedDocument(
+        schema_version="0.1",
+        document_id="doc_report",
+        source=SourceInfo(
+            path=str(root / "report.pptx"),
+            filename="report.pptx",
+            extension=".pptx",
+            mime_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            size_bytes=6,
+            sha256="abc",
+        ),
+        metadata=DocumentMetadata(title="Report"),
+        blocks=[
+            ExtractedBlock(
+                block_id="blk_001",
+                document_id="doc_report",
+                type="text",
+                role="section",
+                order=0,
+                text="Revenue grew by 10%.",
+                normalized_text="Revenue grew by 10%.",
+                provenance=provenance,
+            )
+        ],
+    )
+
+
+if __name__ == "__main__":
+    unittest.main()
