@@ -14,6 +14,7 @@ from .document_pipeline import (
     generate_markdown_command,
     normalize_text_command,
     read_file_info_command,
+    summarize_doc_command,
     workspace_status_command,
 )
 from .errors import SlashToolError
@@ -82,6 +83,12 @@ SLASH_TOOLS: dict[str, SlashTool] = {
         "Generate and auto-save a deterministic markdown evidence report.",
         "/generate_markdown",
         generate_markdown_command,
+    ),
+    "/summarize_doc": SlashTool(
+        "/summarize_doc",
+        "Generate hierarchical LLM-backed summaries from extracted documents.",
+        "/summarize_doc [path]",
+        summarize_doc_command,
     ),
 }
 

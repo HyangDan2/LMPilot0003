@@ -17,6 +17,7 @@ DEFAULT_CONNECTION_SETTINGS_PATH = "openai_settings.json"
 class AppConfig:
     llama_cli_path: str
     model_path: str
+    config_path: str = ""
     backend: str = "openai"
     server_url: str = ""
     server_endpoint: str = "auto"
@@ -45,6 +46,7 @@ class AppConfig:
     rag_chunk_chars: int = 1200
     rag_chunk_overlap: int = 150
     memory_context_char_limit: int = 4000
+    last_working_folder: str = ""
 
     def connection_settings(self) -> OpenAIConnectionSettings:
         return OpenAIConnectionSettings(
@@ -87,7 +89,13 @@ def load_config(path: str) -> AppConfig:
     temperature = saved_connection.temperature if saved_connection.temperature != 0.7 else temperature
     n_predict = saved_connection.max_tokens if saved_connection.max_tokens != 512 else n_predict
 
+    last_working_folder = str(raw.get("last_working_folder", "") or "").strip()
+    if last_working_folder:
+        folder_path = Path(last_working_folder).expanduser()
+        last_working_folder = str(folder_path.resolve()) if folder_path.exists() and folder_path.is_dir() else ""
+
     return AppConfig(
+        config_path=str(config_path),
         llama_cli_path=raw.get(
             "llama_cli_path",
             "/home/pi/Downloads/llama.cpp/build/bin/llama-cli",
@@ -124,6 +132,7 @@ def load_config(path: str) -> AppConfig:
         rag_chunk_chars=int(raw.get("rag_chunk_chars", 1200)),
         rag_chunk_overlap=int(raw.get("rag_chunk_overlap", 150)),
         memory_context_char_limit=int(raw.get("memory_context_char_limit", 4000)),
+        last_working_folder=last_working_folder,
     )
 
 
@@ -157,3 +166,15 @@ def save_connection_settings(path: str, settings: OpenAIConnectionSettings) -> N
     with settings_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
         f.write("\n")
+
+
+def save_config(config: AppConfig) -> None:
+    if not config.config_path.strip():
+        return
+    config_path = Path(config.config_path)
+    if config_path.parent != Path("."):
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = asdict(config)
+    payload.pop("config_path", None)
+    with config_path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(payload, f, sort_keys=False, allow_unicode=True)

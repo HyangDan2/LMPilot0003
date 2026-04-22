@@ -33,7 +33,8 @@ If you need previously generated output files, request them with one of these ta
 [list_outputs] document_pipeline [/list_outputs]
 Qwen-style aliases are also supported for generated outputs, such as:
 [read_file] llm/document_pipeline/generated_report.md [/read_file]
-Only generated files under llm_result/ are available through these tags.
+[read_file] llm_output/document_pipeline/workspace_20260422_231501/workspace_summary.md [/read_file]
+Only generated files under llm_result/ and llm_output/ are available through these tags.
 Do not say you lack authority to read generated artifacts; request them with the tag when needed."""
 
 
@@ -118,11 +119,11 @@ def build_artifact_followup_messages(
 
 def resolve_output_artifact_path(working_folder: str | Path, requested_path: str) -> Path:
     root = Path(working_folder).expanduser().resolve()
-    artifact_root = (root / "llm_result").resolve()
     normalized = _normalize_artifact_request_path(requested_path)
     target = (root / normalized).expanduser().resolve()
-    if target != artifact_root and artifact_root not in target.parents:
-        raise ValueError("Generated artifact access is limited to llm_result/.")
+    allowed_roots = [(root / "llm_result").resolve(), (root / "llm_output").resolve()]
+    if not any(target == artifact_root or artifact_root in target.parents for artifact_root in allowed_roots):
+        raise ValueError("Generated artifact access is limited to llm_result/ and llm_output/.")
     return target
 
 
@@ -136,6 +137,8 @@ def _normalize_artifact_request_path(requested_path: str) -> Path:
         raw = "llm_result/" + raw[len("llm/") :]
     elif raw == "llm":
         raw = "llm_result"
+    elif raw.startswith("llm_output/") or raw == "llm_output":
+        raw = raw
     elif raw.startswith("document_pipeline/") or raw == "document_pipeline":
         raw = "llm_result/" + raw
     elif not raw.startswith("llm_result/") and raw != "llm_result":

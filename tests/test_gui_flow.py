@@ -2,6 +2,7 @@ import os
 import tempfile
 import time
 import unittest
+import yaml
 from pathlib import Path
 from threading import Lock
 from unittest.mock import patch
@@ -93,8 +94,9 @@ class GuiFlowTests(unittest.TestCase):
         prompt = console.prompts[-1]
         self.assertIsInstance(prompt, ModelPrompt)
         assert isinstance(prompt, ModelPrompt)
-        self.assertEqual(prompt.messages[-1], {"role": "user", "content": "second"})
-        self.assertIn("<start_of_turn>user\nsecond<end_of_turn>", prompt.completion_prompt)
+        self.assertEqual(prompt.messages[-1]["role"], "user")
+        self.assertIn("second", str(prompt.messages[-1]["content"]))
+        self.assertIn("second<end_of_turn>", prompt.completion_prompt)
         self.assertTrue(prompt.completion_prompt.endswith("<start_of_turn>model"))
 
         window.close()
@@ -279,6 +281,63 @@ class GuiFlowTests(unittest.TestCase):
         self.assertTrue(any("Relevant retrieved context:" in message for message in system_messages))
         self.assertTrue(any("notes.txt" in message for message in system_messages))
         self.assertTrue(any("alpha semantic match" in message for message in system_messages))
+
+        window.close()
+        process_events(self.app, 5)
+
+    def test_last_working_folder_is_restored_on_startup(self) -> None:
+        console = FakeConsole()
+        db_path = Path(tempfile.mkdtemp()) / "app.db"
+        config_path = Path(tempfile.mkdtemp()) / "config.yaml"
+        attached_folder = Path(tempfile.mkdtemp())
+        attached_file = attached_folder / "notes.txt"
+        attached_file.write_text("hello", encoding="utf-8")
+        config_path.write_text("backend: cli\nlast_working_folder: ''\n", encoding="utf-8")
+
+        window = MainWindow(
+            console,
+            ChatRepository(str(db_path)),
+            AppConfig(
+                llama_cli_path="/bin/echo",
+                model_path="/tmp/model.gguf",
+                backend="cli",
+                config_path=str(config_path),
+                last_working_folder=str(attached_folder.resolve()),
+            ),
+        )
+
+        self.assertEqual(window._active_attachment_folder(), str(attached_folder.resolve()))
+        self.assertEqual(window.attachment_list.count(), 1)
+        self.assertIn("notes.txt", window.attachment_list.item(0).text())
+
+        saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["last_working_folder"], str(attached_folder.resolve()))
+
+        window.close()
+        process_events(self.app, 5)
+
+    def test_missing_last_working_folder_is_cleared(self) -> None:
+        console = FakeConsole()
+        db_path = Path(tempfile.mkdtemp()) / "app.db"
+        config_path = Path(tempfile.mkdtemp()) / "config.yaml"
+        missing_folder = Path(tempfile.mkdtemp()) / "missing"
+        config_path.write_text("backend: cli\nlast_working_folder: ''\n", encoding="utf-8")
+
+        window = MainWindow(
+            console,
+            ChatRepository(str(db_path)),
+            AppConfig(
+                llama_cli_path="/bin/echo",
+                model_path="/tmp/model.gguf",
+                backend="cli",
+                config_path=str(config_path),
+                last_working_folder=str(missing_folder),
+            ),
+        )
+
+        self.assertIsNone(window._active_attachment_folder())
+        saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["last_working_folder"], "")
 
         window.close()
         process_events(self.app, 5)

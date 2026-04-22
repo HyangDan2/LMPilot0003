@@ -22,6 +22,7 @@ recent_message_limit: 40
 rag_top_k: 5
 rag_min_score: 0.2
 memory_context_char_limit: 4000
+last_working_folder: ""
 
 # Legacy llama-cli backend settings are only used when backend: "cli".
 llama_cli_path: "/path/to/your/llama-cli"

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Iterator, Optional
 from urllib.parse import urlparse
 
-import wexpect
+import pexpect
 
 from .artifact_tools import (
     ARTIFACT_ACCESS_INSTRUCTION,
@@ -496,7 +496,7 @@ class LlamaServerSession:
 class LlamaConsoleSession:
     def __init__(self, config: ConsoleConfig) -> None:
         self.config = config
-        self.child: Optional[wexpect.spawn] = None
+        self.child: Optional[pexpect.spawn] = None
         self._started = False
 
     def start(self) -> None:
@@ -507,7 +507,7 @@ class LlamaConsoleSession:
         cmd = self._build_command()
         env = self._build_env()
 
-        self.child = wexpect.spawn(
+        self.child = pexpect.spawn(
             command=cmd[0],
             args=cmd[1:],
             env=env,
@@ -571,8 +571,8 @@ class LlamaConsoleSession:
                 else:
                     self.child.sendline("/exit")
                     try:
-                        self.child.expect(wexpect.EOF, timeout=5)
-                    except wexpect.TIMEOUT:
+                        self.child.expect(pexpect.EOF, timeout=5)
+                    except pexpect.TIMEOUT:
                         self.child.terminate(force=True)
         finally:
             self.child = None
@@ -627,7 +627,7 @@ class LlamaConsoleSession:
         while time.time() < deadline:
             remaining = max(0.1, deadline - time.time())
             try:
-                idx = self.child.expect([PROMPT_RE, wexpect.EOF, wexpect.TIMEOUT], timeout=remaining)
+                idx = self.child.expect([PROMPT_RE, pexpect.EOF, pexpect.TIMEOUT], timeout=remaining)
                 if idx == 0:
                     collected.append(self.child.before or "")
                     return "".join(collected)
@@ -639,7 +639,7 @@ class LlamaConsoleSession:
                     )
                 if idx == 2:
                     continue
-            except wexpect.TIMEOUT:
+            except pexpect.TIMEOUT:
                 continue
 
         raise ConsoleSessionError(

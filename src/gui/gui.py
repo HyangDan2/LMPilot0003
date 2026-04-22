@@ -39,7 +39,7 @@ from .attachment_handler import (
     list_supported_files_in_folder,
     validate_attachment_path,
 )
-from .config import AppConfig, save_connection_settings
+from .config import AppConfig, save_config, save_connection_settings
 from .console_session import (
     ConsoleConfig,
     ConsoleSessionError,
@@ -371,6 +371,7 @@ class MainWindow(QMainWindow):
 
         self._init_console()
         self._reload_sessions()
+        self._restore_last_working_folder()
         self._set_status('Idle')
         self._append_block('System', 'Select a session or click New Chat.')
 
@@ -581,38 +582,10 @@ class MainWindow(QMainWindow):
         )
         if not folder:
             return
-
         try:
-            files = list_supported_files_in_folder(folder)
+            self._attach_folder_path(folder, persist=True)
         except AttachmentError as exc:
             QMessageBox.warning(self, 'Attach Folder', str(exc))
-            return
-
-        self._attached_file_paths.clear()
-        self._attachment_folder_roots.clear()
-        self.attachment_list.clear()
-
-        root = str(Path(folder).expanduser().resolve())
-        existing_paths = set(self._attached_file_paths)
-        failures: list[str] = []
-        for path in files:
-            try:
-                attachment_path = str(validate_attachment_path(str(path)))
-            except AttachmentError as exc:
-                failures.append(str(exc))
-                continue
-            self._attachment_folder_roots[attachment_path] = root
-            if attachment_path in existing_paths:
-                continue
-            self._attached_file_paths.append(attachment_path)
-            existing_paths.add(attachment_path)
-
-        self._refresh_attachment_list()
-        self._rag_index_signature = None
-        self._rag_settings_signature = None
-        self._slash_tool_context.reset_for_folder(Path(root))
-        if failures:
-            QMessageBox.warning(self, 'Attach Folder', '\n'.join(failures))
 
     @Slot()
     def on_save_chat_markdown(self) -> None:
@@ -800,6 +773,8 @@ class MainWindow(QMainWindow):
         if active is None or not text:
             return
         formatted = text if kind == "markdown" else text
+        if not formatted.endswith("\n"):
+            formatted = f"{formatted}\n"
         active.stream_parts.append(formatted)
         if self.current_session_id == session_id:
             self._append_tool_stream_text(formatted)
@@ -1172,7 +1147,56 @@ class MainWindow(QMainWindow):
         self._rag_index_signature = None
         self._rag_settings_signature = None
         self._slash_tool_context.reset_for_folder(None)
+        self.app_config.last_working_folder = ""
+        save_config(self.app_config)
         self._refresh_attachment_list()
+
+    def _attach_folder_path(self, folder: str, persist: bool) -> None:
+        files = list_supported_files_in_folder(folder)
+        self._attached_file_paths.clear()
+        self._attachment_folder_roots.clear()
+        self.attachment_list.clear()
+
+        root = str(Path(folder).expanduser().resolve())
+        existing_paths = set(self._attached_file_paths)
+        failures: list[str] = []
+        for path in files:
+            try:
+                attachment_path = str(validate_attachment_path(str(path)))
+            except AttachmentError as exc:
+                failures.append(str(exc))
+                continue
+            self._attachment_folder_roots[attachment_path] = root
+            if attachment_path in existing_paths:
+                continue
+            self._attached_file_paths.append(attachment_path)
+            existing_paths.add(attachment_path)
+
+        self._refresh_attachment_list()
+        self._rag_index_signature = None
+        self._rag_settings_signature = None
+        self._slash_tool_context.reset_for_folder(Path(root))
+        self.app_config.last_working_folder = root
+        if persist:
+            save_config(self.app_config)
+        if failures:
+            raise AttachmentError('\n'.join(failures))
+
+    def _restore_last_working_folder(self) -> None:
+        folder = self.app_config.last_working_folder.strip()
+        if not folder:
+            return
+        folder_path = Path(folder).expanduser()
+        if not folder_path.exists() or not folder_path.is_dir():
+            self.app_config.last_working_folder = ""
+            save_config(self.app_config)
+            return
+        try:
+            self._attach_folder_path(str(folder_path), persist=True)
+            self._set_status(f'Restored workspace folder: {folder_path}')
+        except AttachmentError:
+            self.app_config.last_working_folder = ""
+            save_config(self.app_config)
 
     def _build_retrieved_context(
         self,

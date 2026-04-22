@@ -15,39 +15,80 @@ def pipeline_output_dir(working_folder: Path) -> Path:
     return working_folder.expanduser().resolve() / "llm_result" / "document_pipeline"
 
 
-def save_extracted_documents(working_folder: Path, documents: list[ExtractedDocument]) -> Path:
-    path = pipeline_output_dir(working_folder) / "extracted_documents.json"
+def pipeline_scoped_output_dir(working_folder: Path, scope_name: str) -> Path:
+    """Return the automatic artifact folder for one file-scoped pipeline run."""
+
+    return pipeline_output_dir(working_folder) / scope_name
+
+
+def summary_output_dir(working_folder: Path) -> Path:
+    """Return the automatic artifact folder for summary outputs."""
+
+    return working_folder.expanduser().resolve() / "llm_output" / "document_pipeline"
+
+
+def summary_run_output_dir(working_folder: Path, run_name: str) -> Path:
+    """Return the automatic artifact folder for one summary run."""
+
+    return summary_output_dir(working_folder) / run_name
+
+
+def save_extracted_documents(
+    working_folder: Path,
+    documents: list[ExtractedDocument],
+    scope_name: str | None = None,
+) -> Path:
+    output_dir = pipeline_scoped_output_dir(working_folder, scope_name) if scope_name else pipeline_output_dir(working_folder)
+    path = output_dir / "extracted_documents.json"
     _write_json(path, {"documents": [document.to_dict() for document in documents]})
     return path
 
 
-def save_single_document(working_folder: Path, document: ExtractedDocument) -> Path:
-    path = pipeline_output_dir(working_folder) / "documents" / f"{document.document_id}.json"
+def save_single_document(working_folder: Path, document: ExtractedDocument, scope_name: str | None = None) -> Path:
+    output_dir = pipeline_scoped_output_dir(working_folder, scope_name) if scope_name else pipeline_output_dir(working_folder)
+    path = output_dir / "documents" / f"{document.document_id}.json"
     _write_json(path, document.to_dict())
     return path
 
 
-def save_document_map(working_folder: Path, doc_map: DocumentMap) -> Path:
-    path = pipeline_output_dir(working_folder) / "document_map.json"
+def save_document_map(working_folder: Path, doc_map: DocumentMap, scope_name: str | None = None) -> Path:
+    output_dir = pipeline_scoped_output_dir(working_folder, scope_name) if scope_name else pipeline_output_dir(working_folder)
+    path = output_dir / "document_map.json"
     _write_json(path, doc_map.to_dict())
     return path
 
 
-def save_chunks(working_folder: Path, chunks: list[EvidenceChunk]) -> Path:
-    path = pipeline_output_dir(working_folder) / "chunks.json"
+def save_chunks(working_folder: Path, chunks: list[EvidenceChunk], scope_name: str | None = None) -> Path:
+    output_dir = pipeline_scoped_output_dir(working_folder, scope_name) if scope_name else pipeline_output_dir(working_folder)
+    path = output_dir / "chunks.json"
     _write_json(path, {"chunks": [chunk.to_dict() for chunk in chunks]})
     return path
 
 
-def save_generated_markdown(working_folder: Path, markdown: str) -> Path:
-    path = pipeline_output_dir(working_folder) / "generated_report.md"
+def save_generated_markdown(working_folder: Path, markdown: str, scope_name: str | None = None) -> Path:
+    output_dir = pipeline_scoped_output_dir(working_folder, scope_name) if scope_name else pipeline_output_dir(working_folder)
+    path = output_dir / "generated_report.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(markdown, encoding="utf-8")
     return path
 
 
-def save_manifest(working_folder: Path, documents: list[ExtractedDocument]) -> Path:
-    path = pipeline_output_dir(working_folder) / "extraction_manifest.json"
+def save_document_summaries(working_folder: Path, payload: dict[str, Any], run_name: str) -> Path:
+    path = summary_run_output_dir(working_folder, run_name) / "document_summaries.json"
+    _write_json(path, payload)
+    return path
+
+
+def save_workspace_summary(working_folder: Path, markdown: str, run_name: str) -> Path:
+    path = summary_run_output_dir(working_folder, run_name) / "workspace_summary.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(markdown, encoding="utf-8")
+    return path
+
+
+def save_manifest(working_folder: Path, documents: list[ExtractedDocument], scope_name: str | None = None) -> Path:
+    output_dir = pipeline_scoped_output_dir(working_folder, scope_name) if scope_name else pipeline_output_dir(working_folder)
+    path = output_dir / "extraction_manifest.json"
     payload = {
         "schema_version": "0.1",
         "document_count": len(documents),
@@ -60,8 +101,9 @@ def save_manifest(working_folder: Path, documents: list[ExtractedDocument]) -> P
     return path
 
 
-def load_extracted_documents_payload(working_folder: Path) -> dict[str, Any]:
-    path = pipeline_output_dir(working_folder) / "extracted_documents.json"
+def load_extracted_documents_payload(working_folder: Path, scope_name: str | None = None) -> dict[str, Any]:
+    output_dir = pipeline_scoped_output_dir(working_folder, scope_name) if scope_name else pipeline_output_dir(working_folder)
+    path = output_dir / "extracted_documents.json"
     with path.open("r", encoding="utf-8") as f:
         payload = json.load(f)
     if not isinstance(payload, dict):
@@ -69,23 +111,34 @@ def load_extracted_documents_payload(working_folder: Path) -> dict[str, Any]:
     return payload
 
 
-def load_extracted_documents(working_folder: Path) -> list[ExtractedDocument]:
-    return documents_from_payload(load_extracted_documents_payload(working_folder))
+def load_extracted_documents(working_folder: Path, scope_name: str | None = None) -> list[ExtractedDocument]:
+    return documents_from_payload(load_extracted_documents_payload(working_folder, scope_name))
 
 
-def load_document_map_payload(working_folder: Path) -> dict[str, Any]:
-    path = pipeline_output_dir(working_folder) / "document_map.json"
+def load_document_map_payload(working_folder: Path, scope_name: str | None = None) -> dict[str, Any]:
+    output_dir = pipeline_scoped_output_dir(working_folder, scope_name) if scope_name else pipeline_output_dir(working_folder)
+    path = output_dir / "document_map.json"
     return _read_json_object(path, "document_map.json")
 
 
-def load_chunks_payload(working_folder: Path) -> dict[str, Any]:
-    path = pipeline_output_dir(working_folder) / "chunks.json"
+def load_chunks_payload(working_folder: Path, scope_name: str | None = None) -> dict[str, Any]:
+    output_dir = pipeline_scoped_output_dir(working_folder, scope_name) if scope_name else pipeline_output_dir(working_folder)
+    path = output_dir / "chunks.json"
     return _read_json_object(path, "chunks.json")
 
 
-def load_manifest_payload(working_folder: Path) -> dict[str, Any]:
-    path = pipeline_output_dir(working_folder) / "extraction_manifest.json"
+def load_manifest_payload(working_folder: Path, scope_name: str | None = None) -> dict[str, Any]:
+    output_dir = pipeline_scoped_output_dir(working_folder, scope_name) if scope_name else pipeline_output_dir(working_folder)
+    path = output_dir / "extraction_manifest.json"
     return _read_json_object(path, "extraction_manifest.json")
+
+
+def pipeline_scope_name_from_path(path: Path) -> str:
+    name = path.name.strip().lower() or "document"
+    safe = "".join(char if char.isalnum() else "_" for char in name)
+    while "__" in safe:
+        safe = safe.replace("__", "_")
+    return safe.strip("_") or "document"
 
 
 def _write_json(path: Path, payload: Any) -> None:

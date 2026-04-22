@@ -24,7 +24,15 @@ class ArtifactToolsTests(unittest.TestCase):
 
             path = resolve_output_artifact_path(root, "document_pipeline/generated_report.md")
 
-            self.assertEqual(path, root / "llm_result" / "document_pipeline" / "generated_report.md")
+            self.assertEqual(path, (root / "llm_result" / "document_pipeline" / "generated_report.md").resolve())
+
+    def test_resolves_paths_under_llm_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+
+            path = resolve_output_artifact_path(root, "llm_output/document_pipeline/workspace_summary.md")
+
+            self.assertEqual(path, (root / "llm_output" / "document_pipeline" / "workspace_summary.md").resolve())
 
     def test_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -57,6 +65,21 @@ class ArtifactToolsTests(unittest.TestCase):
 
             self.assertTrue(result.ok)
             self.assertIn("generated_report.md", result.text)
+
+    def test_reads_summary_artifact_from_llm_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            report = root / "llm_output" / "document_pipeline" / "workspace_summary.md"
+            report.parent.mkdir(parents=True)
+            report.write_text("# Workspace Summary\n\nSummary.", encoding="utf-8")
+
+            result = execute_artifact_request(
+                root,
+                ArtifactRequest("read_file", "llm_output/document_pipeline/workspace_summary.md"),
+            )
+
+            self.assertTrue(result.ok)
+            self.assertIn("# Workspace Summary", result.text)
 
 
 if __name__ == "__main__":
