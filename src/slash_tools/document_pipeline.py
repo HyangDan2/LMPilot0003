@@ -588,18 +588,9 @@ def _chat_summary(
     original_max_tokens = client.settings.max_tokens
     try:
         client.settings.max_tokens = max_tokens
-        return client.chat_completion_with_reasoning_fallback(
-            messages,
-            on_reasoning=lambda attempt, reasoning: _emit_reasoning_progress(progress, attempt, reasoning),
-        )
+        return client.chat_completion_with_reasoning_fallback(messages)
     finally:
         client.settings.max_tokens = original_max_tokens
-
-
-def _emit_reasoning_progress(progress, attempt: int, reasoning: str) -> None:
-    preview = reasoning.strip() or "(empty reasoning)"
-    _emit_progress(progress, "markdown", f"Assistant: Reasoning... (attempt {attempt})\n{preview}\n")
-    _emit_progress(progress, "status", f"Reasoning-only response received (attempt {attempt}); waiting for final answer...")
 
 
 def _emit_progress(progress, kind: str, text: str) -> None:

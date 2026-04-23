@@ -175,10 +175,16 @@ class OpenAICompatibleClientTests(unittest.TestCase):
             OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model")
         )
 
-        with self.assertRaises(LLMClientError) as raised:
-            list(client.stream_chat_completion([{"role": "user", "content": "Hi"}]))
-
-        self.assertIn("reasoning only", str(raised.exception))
+        self.assertEqual(
+            [
+                (chunk.kind, chunk.text)
+                for chunk in client.stream_chat_completion([{"role": "user", "content": "Hi"}])
+            ],
+            [
+                ("reasoning", "thinking"),
+                ("final", '{\n  "choices": [\n    {\n      "delta": {\n        "reasoning": "thinking"\n      }\n    }\n  ]\n}'),
+            ],
+        )
 
     def test_stream_chat_completion_wraps_attribute_error_from_backend(self) -> None:
         FakeConnection.responses.append(
@@ -267,7 +273,7 @@ class OpenAICompatibleClientTests(unittest.TestCase):
 
         self.assertEqual(client.chat_completion([{"role": "user", "content": "Hi"}]), "fallback text")
 
-    def test_chat_completion_errors_on_message_reasoning_only(self) -> None:
+    def test_chat_completion_returns_pretty_json_on_message_reasoning_only(self) -> None:
         FakeConnection.responses.append(
             FakeResponse(
                 200,
@@ -294,29 +300,43 @@ class OpenAICompatibleClientTests(unittest.TestCase):
             OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model")
         )
 
-        with self.assertRaises(LLMClientError) as raised:
-            client.chat_completion([{"role": "user", "content": "Hi"}])
+        answer = client.chat_completion([{"role": "user", "content": "Hi"}])
+        self.assertEqual(
+            answer,
+            '{\n'
+            '  "choices": [\n'
+            '    {\n'
+            '      "finish_reason": "length",\n'
+            '      "index": 0,\n'
+            '      "logprobs": null,\n'
+            '      "message": {\n'
+            '        "annotations": null,\n'
+            '        "audio": null,\n'
+            '        "content": null,\n'
+            '        "context": null,\n'
+            '        "function_call": null,\n'
+            '        "reasoning": "Thinking Process:\\n\\n1. Use the available text."\n'
+            '      }\n'
+            '    }\n'
+            '  ]\n'
+            '}',
+        )
 
-        self.assertIn("reasoning only", str(raised.exception))
-
-    def test_chat_completion_with_reasoning_fallback_retries_for_final_answer(self) -> None:
-        FakeConnection.responses.extend(
-            [
-                FakeResponse(
-                    200,
-                    {
-                        "choices": [
-                            {
-                                "message": {
-                                    "content": None,
-                                    "reasoning_content": "Thinking Process: inspect the source.",
-                                }
+    def test_chat_completion_with_reasoning_fallback_returns_raw_json_without_retry(self) -> None:
+        FakeConnection.responses.append(
+            FakeResponse(
+                200,
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": None,
+                                "reasoning_content": "Thinking Process: inspect the source.",
                             }
-                        ]
-                    },
-                ),
-                FakeResponse(200, {"choices": [{"message": {"content": "final summary"}}]}),
-            ]
+                        }
+                    ]
+                },
+            )
         )
         client = self.make_client(
             OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model")
@@ -328,51 +348,21 @@ class OpenAICompatibleClientTests(unittest.TestCase):
             on_reasoning=lambda attempt, text: reasoning_events.append(f"{attempt}:{text}"),
         )
 
-        self.assertEqual(answer, "final summary")
-        self.assertEqual(reasoning_events, ["1:Thinking Process: inspect the source."])
-        self.assertEqual(len(FakeConnection.requests), 2)
-        retry_messages = FakeConnection.requests[1]["body"]["messages"]
-        self.assertEqual(retry_messages[-2]["role"], "assistant")
-        self.assertIn("Thinking Process", retry_messages[-2]["content"])
-        self.assertEqual(retry_messages[-1]["role"], "user")
-        self.assertIn("Continue from the previous reasoning", retry_messages[-1]["content"])
-
-    def test_chat_completion_with_reasoning_fallback_fails_after_max_attempts(self) -> None:
-        FakeConnection.responses.extend(
-            [
-                FakeResponse(
-                    200,
-                    {
-                        "choices": [
-                            {
-                                "message": {
-                                    "content": None,
-                                    "reasoning_content": f"Reasoning #{index}",
-                                }
-                            }
-                        ]
-                    },
-                )
-                for index in range(1, 4)
-            ]
+        self.assertEqual(
+            answer,
+            '{\n'
+            '  "choices": [\n'
+            '    {\n'
+            '      "message": {\n'
+            '        "content": null,\n'
+            '        "reasoning_content": "Thinking Process: inspect the source."\n'
+            '      }\n'
+            '    }\n'
+            '  ]\n'
+            '}',
         )
-        client = self.make_client(
-            OpenAIConnectionSettings(
-                base_url="http://localhost:1234/v1",
-                model="local-model",
-                reasoning_followup_max_attempts=3,
-            )
-        )
-        reasoning_events: list[str] = []
-
-        with self.assertRaises(LLMClientError) as raised:
-            client.chat_completion_with_reasoning_fallback(
-                [{"role": "user", "content": "Summarize"}],
-                on_reasoning=lambda attempt, text: reasoning_events.append(f"{attempt}:{text}"),
-            )
-
-        self.assertIn("after 3 follow-up attempts", str(raised.exception))
-        self.assertEqual(reasoning_events, ["1:Reasoning #1", "2:Reasoning #2", "3:Reasoning #3"])
+        self.assertEqual(reasoning_events, [])
+        self.assertEqual(len(FakeConnection.requests), 1)
 
     def test_chat_completion_tries_fallbacks_after_empty_content(self) -> None:
         FakeConnection.responses.append(

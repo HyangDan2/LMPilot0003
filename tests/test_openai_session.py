@@ -34,13 +34,7 @@ class FakeOpenAIClient:
         return result
 
     def chat_completion_with_reasoning_fallback(self, messages: list[dict[str, str]]) -> str:
-        try:
-            return self.chat_completion(messages)
-        except LLMClientError as exc:
-            if "reasoning only" not in str(exc):
-                raise
-            retry_messages = [{"role": "system", "content": "Reply again with only the final answer."}, *messages]
-            return self.chat_completion(retry_messages)
+        return self.chat_completion(messages)
 
     def close_active_request(self) -> None:
         pass
@@ -84,28 +78,29 @@ class OpenAICompatibleSessionTests(unittest.TestCase):
         self.assertEqual(str(raised.exception), "Generation stopped.")
         self.assertEqual(client.chat_completion_calls, 0)
 
-    def test_reasoning_only_non_streaming_response_retries_for_final_answer(self) -> None:
+    def test_reasoning_only_non_streaming_response_returns_raw_json_without_retry(self) -> None:
         client = FakeOpenAIClient(
             [],
             chat_results=[
-                LLMClientError("Backend returned reasoning only, but no final assistant answer."),
-                "final answer",
+                '{\n  "choices": [\n    {\n      "message": {\n        "content": null,\n        "reasoning": "thinking"\n      }\n    }\n  ]\n}',
             ],
         )
         session = self.make_session(client)
 
-        self.assertEqual(session.ask("hello"), "final answer")
-        self.assertEqual(client.chat_completion_calls, 2)
-        self.assertEqual(client.chat_messages[1][0]["role"], "system")
-        self.assertIn("only the final answer", client.chat_messages[1][0]["content"])
+        self.assertEqual(
+            session.ask("hello"),
+            '{\n  "choices": [\n    {\n      "message": {\n        "content": null,\n        "reasoning": "thinking"\n      }\n    }\n  ]\n}',
+        )
+        self.assertEqual(client.chat_completion_calls, 1)
 
-    def test_reasoning_only_stream_fallback_uses_final_answer_retry(self) -> None:
+    def test_reasoning_only_stream_returns_raw_json_without_retry(self) -> None:
         client = FakeOpenAIClient(
-            [ChatStreamChunk(kind="reasoning")],
-            LLMClientError("Backend returned reasoning only, but no final assistant answer."),
-            chat_results=[
-                LLMClientError("Backend returned reasoning only, but no final assistant answer."),
-                "final answer",
+            [
+                ChatStreamChunk(kind="reasoning"),
+                ChatStreamChunk(
+                    kind="final",
+                    text='{\n  "choices": [\n    {\n      "delta": {\n        "reasoning": "thinking"\n      }\n    }\n  ]\n}',
+                ),
             ],
         )
         session = self.make_session(client)
@@ -114,9 +109,12 @@ class OpenAICompatibleSessionTests(unittest.TestCase):
 
         self.assertEqual(
             [(chunk.kind, chunk.text) for chunk in chunks],
-            [("reasoning", ""), ("final", "final answer")],
+            [
+                ("reasoning", ""),
+                ("final", '{\n  "choices": [\n    {\n      "delta": {\n        "reasoning": "thinking"\n      }\n    }\n  ]\n}'),
+            ],
         )
-        self.assertEqual(client.chat_completion_calls, 2)
+        self.assertEqual(client.chat_completion_calls, 0)
 
     def test_artifact_request_reads_generated_report_and_retries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
