@@ -24,7 +24,9 @@ from src.document_pipeline.storage import (
     save_manifest,
     save_single_document,
     save_workspace_summary,
+    summary_run_output_dir,
 )
+from src.ingestion.scanner import scan_supported_files
 from src.gui.llm_client import LLMClientError, OpenAICompatibleClient
 from src.document_pipeline.schemas import ExtractedDocument
 
@@ -242,29 +244,14 @@ def summarize_doc_command(
         raise SlashToolError(str(exc)) from exc
 
     _emit_progress(progress, "status", "Saving summary artifacts...")
-    run_name = _summary_run_name(target_path)
-    summaries_payload = {
-        "schema_version": "0.1",
-        "summary_method": "hierarchical",
-        "summary_mode": "engineering" if engineering else "standard",
-        "run_name": run_name,
-        "document_count": len(document_summaries),
-        "target_path": _relative_to_root(target_path, root) if target_path is not None else None,
-        "workspace_summary": workspace_summary.to_dict(),
-        "budgets": {
-            "per_doc_input_chars": budget.per_doc_input_chars,
-            "per_doc_output_tokens": budget.per_doc_output_tokens,
-            "consolidate_input_chars": budget.consolidate_input_chars,
-            "consolidate_output_tokens": budget.consolidate_output_tokens,
-            "workspace_input_chars": budget.workspace_input_chars,
-            "workspace_output_tokens": budget.workspace_output_tokens,
-            "block_excerpt_chars": budget.block_excerpt_chars,
-        },
-        "documents": [item.to_dict() for item in document_summaries],
-    }
-    markdown = render_workspace_summary_markdown(document_summaries, workspace_summary)
-    summaries_path = save_document_summaries(root, summaries_payload, run_name)
-    workspace_path = save_workspace_summary(root, markdown, run_name)
+    run_name, summaries_path, workspace_path = _save_summary_artifacts(
+        root=root,
+        target_path=target_path,
+        document_summaries=document_summaries,
+        workspace_summary=workspace_summary,
+        budget=budget,
+        engineering=engineering,
+    )
     saved_files = [_relative_to_root(summaries_path, root), _relative_to_root(workspace_path, root)]
     lines = ["Generated hierarchical document summaries."]
     if auto_extract_message:
@@ -296,7 +283,81 @@ def summarize_doc_command(
     )
 
 
-def _parse_summarize_doc_args(args: list[str]) -> tuple[bool, str | None]:
+def summarize_docs_command(
+    args: list[str], working_folder: str | Path | None, context: SlashToolContext, progress=None
+) -> SlashToolResult:
+    root = require_working_folder(working_folder)
+    engineering, target_arg = _parse_summarize_doc_args(args, command_name="/summarize_docs", allow_path=False)
+    if target_arg is not None:
+        raise SlashToolError("Usage: /summarize_docs [--engineering True|False]")
+    files = scan_supported_files(root)
+    if not files:
+        raise SlashToolError("No supported documents are available in the attached folder.")
+
+    client = _get_summary_client(context)
+    budget = SummaryBudget()
+    saved_files: list[str] = []
+    completed: list[tuple[Path, str]] = []
+    failed: list[tuple[Path, str]] = []
+
+    for index, path in enumerate(files, start=1):
+        if context.cancel_requested is not None and context.cancel_requested():
+            raise SlashToolError("Summarization stopped.")
+        _emit_progress(progress, "status", f"Summarizing file {index}/{len(files)}: {_relative_to_root(path, root)}")
+        try:
+            document = _document_for_single_file_summary(root, context, path, progress)
+            document_summaries, workspace_summary = summarize_documents_hierarchically(
+                [document],
+                call_model=lambda messages, max_tokens: _chat_summary(client, messages, max_tokens),
+                budget=budget,
+                engineering=engineering,
+                progress=lambda message: _emit_progress(progress, "status", message),
+                cancel_requested=context.cancel_requested,
+            )
+            run_name, summaries_path, workspace_path = _save_summary_artifacts(
+                root=root,
+                target_path=path,
+                document_summaries=document_summaries,
+                workspace_summary=workspace_summary,
+                budget=budget,
+                engineering=engineering,
+            )
+            saved_files.extend([_relative_to_root(summaries_path, root), _relative_to_root(workspace_path, root)])
+            completed.append((path, run_name))
+        except (SlashToolError, LLMClientError, OSError, ValueError, RuntimeError) as exc:
+            failed.append((path, str(exc)))
+
+    if not completed:
+        details = "; ".join(f"{_relative_to_root(path, root)}: {error}" for path, error in failed)
+        raise SlashToolError(f"Could not summarize any supported documents. {details}")
+
+    lines = [
+        "Generated chained document summaries.",
+        "",
+        f"- mode: {'engineering' if engineering else 'standard'}",
+        f"- supported_files: {len(files)}",
+        f"- completed: {len(completed)}",
+        f"- failed: {len(failed)}",
+        "",
+        "Summary runs:",
+    ]
+    lines.extend(f"- {_relative_to_root(path, root)} -> {run_name}" for path, run_name in completed)
+    if failed:
+        lines.extend(["", "Failed files:"])
+        lines.extend(f"- {_relative_to_root(path, root)}: {error}" for path, error in failed)
+    return _result(
+        "/summarize_docs",
+        "\n".join(lines),
+        saved_files=saved_files,
+        next_actions=["/workspace_status", "Ask a normal question about the generated summaries"],
+    )
+
+
+def _parse_summarize_doc_args(
+    args: list[str],
+    command_name: str = "/summarize_doc",
+    allow_path: bool = True,
+) -> tuple[bool, str | None]:
     engineering = False
     remaining: list[str] = []
     index = 0
@@ -304,18 +365,23 @@ def _parse_summarize_doc_args(args: list[str]) -> tuple[bool, str | None]:
         arg = args[index]
         if arg == "--engineering":
             if index + 1 >= len(args):
-                raise SlashToolError("Usage: /summarize_doc [--engineering True|False] [path]")
+                raise SlashToolError(_summarize_usage(command_name, allow_path))
             value = args[index + 1].strip().lower()
             if value not in {"true", "false"}:
-                raise SlashToolError("Usage: /summarize_doc [--engineering True|False] [path]")
+                raise SlashToolError(_summarize_usage(command_name, allow_path))
             engineering = value == "true"
             index += 2
             continue
         remaining.append(arg)
         index += 1
-    if len(remaining) > 1:
-        raise SlashToolError("Usage: /summarize_doc [--engineering True|False] [path]")
+    if len(remaining) > 1 or (remaining and not allow_path):
+        raise SlashToolError(_summarize_usage(command_name, allow_path))
     return engineering, remaining[0] if remaining else None
+
+
+def _summarize_usage(command_name: str, allow_path: bool) -> str:
+    path_part = " [path]" if allow_path else ""
+    return f"Usage: {command_name} [--engineering True|False]{path_part}"
 
 
 def _ensure_documents(root: Path, context: SlashToolContext) -> None:
@@ -400,6 +466,88 @@ def _resolve_documents_for_summary(
     return context.documents, "Auto-ran /extract_docs before summarizing."
 
 
+def _document_for_single_file_summary(
+    root: Path,
+    context: SlashToolContext,
+    target_path: Path,
+    progress,
+) -> ExtractedDocument:
+    if not _same_working_folder(context.working_folder, root):
+        context.reset_for_folder(root)
+
+    target_document = _find_document_by_path(context.documents, target_path)
+    if target_document is not None:
+        return target_document
+
+    target_scope_name = _pipeline_scope_name_for_path(target_path)
+    try:
+        scoped_documents = documents_from_payload(load_extracted_documents_payload(root, target_scope_name))
+    except FileNotFoundError:
+        scoped_documents = []
+    except (OSError, ValueError) as exc:
+        raise SlashToolError(f"Could not load extracted artifact for {_relative_to_root(target_path, root)}: {exc}") from exc
+    target_document = _find_document_by_path(scoped_documents, target_path)
+    if target_document is not None:
+        context.documents = [target_document]
+        context.doc_map = None
+        return target_document
+
+    try:
+        all_documents = documents_from_payload(load_extracted_documents_payload(root))
+    except FileNotFoundError:
+        all_documents = []
+    except (OSError, ValueError) as exc:
+        raise SlashToolError(f"Could not load extracted_documents.json: {exc}") from exc
+    target_document = _find_document_by_path(all_documents, target_path)
+    if target_document is not None:
+        context.documents = [target_document]
+        context.doc_map = None
+        return target_document
+
+    _emit_progress(progress, "status", f"Extracting {_relative_to_root(target_path, root)} before summarizing...")
+    extracted_document = extract_single_doc_mid_level(target_path, ExtractionContext(working_folder=root))
+    context.documents = [extracted_document]
+    context.doc_map = None
+    save_single_document(root, extracted_document, target_scope_name)
+    save_extracted_documents(root, context.documents, target_scope_name)
+    save_manifest(root, context.documents, target_scope_name)
+    return extracted_document
+
+
+def _save_summary_artifacts(
+    root: Path,
+    target_path: Path | None,
+    document_summaries,
+    workspace_summary,
+    budget: SummaryBudget,
+    engineering: bool,
+) -> tuple[str, Path, Path]:
+    run_name = _unique_summary_run_name(root, target_path)
+    summaries_payload = {
+        "schema_version": "0.1",
+        "summary_method": "hierarchical",
+        "summary_mode": "engineering" if engineering else "standard",
+        "run_name": run_name,
+        "document_count": len(document_summaries),
+        "target_path": _relative_to_root(target_path, root) if target_path is not None else None,
+        "workspace_summary": workspace_summary.to_dict(),
+        "budgets": {
+            "per_doc_input_chars": budget.per_doc_input_chars,
+            "per_doc_output_tokens": budget.per_doc_output_tokens,
+            "consolidate_input_chars": budget.consolidate_input_chars,
+            "consolidate_output_tokens": budget.consolidate_output_tokens,
+            "workspace_input_chars": budget.workspace_input_chars,
+            "workspace_output_tokens": budget.workspace_output_tokens,
+            "block_excerpt_chars": budget.block_excerpt_chars,
+        },
+        "documents": [item.to_dict() for item in document_summaries],
+    }
+    markdown = render_workspace_summary_markdown(document_summaries, workspace_summary)
+    summaries_path = save_document_summaries(root, summaries_payload, run_name)
+    workspace_path = save_workspace_summary(root, markdown, run_name)
+    return run_name, summaries_path, workspace_path
+
+
 def _same_working_folder(left: Path | None, right: Path) -> bool:
     if left is None:
         return False
@@ -456,6 +604,16 @@ def _summary_run_name(target_path: Path | None) -> str:
     slug = _slugify_summary_name(stem)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"{slug}_{timestamp}"
+
+
+def _unique_summary_run_name(root: Path, target_path: Path | None) -> str:
+    base = _summary_run_name(target_path)
+    candidate = base
+    suffix = 2
+    while summary_run_output_dir(root, candidate).exists():
+        candidate = f"{base}_{suffix:02d}"
+        suffix += 1
+    return candidate
 
 
 def _slugify_summary_name(value: str) -> str:

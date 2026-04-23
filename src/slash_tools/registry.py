@@ -15,6 +15,7 @@ from .document_pipeline import (
     normalize_text_command,
     read_file_info_command,
     summarize_doc_command,
+    summarize_docs_command,
     workspace_status_command,
 )
 from .errors import SlashToolError
@@ -89,6 +90,12 @@ SLASH_TOOLS: dict[str, SlashTool] = {
         "Generate hierarchical LLM-backed summaries from extracted documents.",
         "/summarize_doc [--engineering True|False] [path]",
         summarize_doc_command,
+    ),
+    "/summarize_docs": SlashTool(
+        "/summarize_docs",
+        "Run single-file summaries for every supported document in the attached folder.",
+        "/summarize_docs [--engineering True|False]",
+        summarize_docs_command,
     ),
 }
 

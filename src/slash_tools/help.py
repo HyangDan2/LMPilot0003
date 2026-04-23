@@ -42,6 +42,10 @@ With --engineering True, the saved summary uses Features, Quantitative Informati
 Summary output length is controlled by substantial minimum-detail prompt instructions; token budgets remain bounded safety caps.
 The saved workspace_summary.md formats prose with one sentence per line, including multi-sentence list items.
 
+/summarize_docs [--engineering True|False]
+Run /summarize_doc-style single-file summaries sequentially for every supported document in the attached folder.
+Each processable document gets its own summary run under HD2docpipe/summaries/.
+
 Normal chat generated-artifact access:
 When a model needs a previous generated output, it can request:
   [read_output] HD2docpipe/artifacts/generated_report.md [/read_output]
@@ -54,6 +58,7 @@ Examples:
   /extract_docs
   /summarize_doc
   /summarize_doc --engineering True design_review.pptx
+  /summarize_docs
   /summarize_doc design_review.pptx
   /generate_markdown
 
@@ -90,6 +95,7 @@ Automatic saved outputs:
 - /summarize_doc stores structured workspace_summary fields in document_summaries.json.
   Standard mode: overall_summary, features, next_action
   Engineering mode: features, quantitative_information, recommended_action
+- /summarize_docs creates one summary run per supported document.
 
 Summary run naming:
 - Folder-wide summaries use workspace_TIMESTAMP

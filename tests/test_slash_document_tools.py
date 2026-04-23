@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -45,6 +46,7 @@ class SlashDocumentToolsTests(unittest.TestCase):
         self.assertIn("/workspace_status", result.text)
         self.assertIn("/generate_markdown", result.text)
         self.assertIn("/summarize_doc", result.text)
+        self.assertIn("/summarize_docs", result.text)
         self.assertIn("HD2docpipe/artifacts/extracted_documents.json", result.text)
         self.assertIn("document_summaries.json", result.text)
         self.assertNotIn("llm_chunk_summaries.json", result.text)
@@ -288,6 +290,45 @@ class SlashDocumentToolsTests(unittest.TestCase):
         assert result is not None
         self.assertIn("Auto-extracted report.pptx before summarizing.", result.text)
 
+    def test_summarize_docs_runs_single_file_summaries_for_supported_files(self) -> None:
+        root = _local_test_tmp() / f"summarize_docs_{uuid.uuid4().hex}"
+        root.mkdir(parents=True)
+        (root / "report.pptx").write_bytes(b"sample")
+        (root / "notes.pdf").write_bytes(b"sample")
+        (root / "ignore.txt").write_text("not supported", encoding="utf-8")
+        context = SlashToolContext(
+            llm_settings=OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model")
+        )
+
+        def fake_extract_single_doc(path, extraction_context):
+            return _sample_document(root, name=path.name, doc_id=f"doc_{path.stem}")
+
+        def fake_chat_completion(self, messages):
+            return SlashDocumentToolsTests._structured_workspace_summary("Batch")
+
+        with patch("src.slash_tools.document_pipeline.extract_single_doc_mid_level", new=fake_extract_single_doc), patch(
+            "src.slash_tools.document_pipeline.OpenAICompatibleClient.chat_completion", new=fake_chat_completion
+        ):
+            result = run_slash_command("/summarize_docs", root, context)
+
+        summary_runs = sorted((root / "HD2docpipe" / "summaries").iterdir())
+        payloads = [
+            json.loads((run_dir / "document_summaries.json").read_text(encoding="utf-8"))
+            for run_dir in summary_runs
+        ]
+
+        assert result is not None
+        self.assertEqual(len(summary_runs), 2)
+        self.assertEqual({payload["target_path"] for payload in payloads}, {"notes.pdf", "report.pptx"})
+        self.assertTrue(all(payload["document_count"] == 1 for payload in payloads))
+        self.assertIn("Generated chained document summaries", result.text)
+        self.assertIn("supported_files: 2", result.text)
+        self.assertIn("completed: 2", result.text)
+        self.assertIn("failed: 0", result.text)
+        self.assertIn("report.pptx -> report_", result.text)
+        self.assertIn("notes.pdf -> notes_", result.text)
+        self.assertNotIn("ignore.txt", result.text)
+
     def test_extract_single_doc_saves_file_scoped_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -373,6 +414,12 @@ def _sample_document(root: Path, name: str = "report.pptx", doc_id: str = "doc_r
             )
         ],
     )
+
+
+def _local_test_tmp() -> Path:
+    path = Path(".test_tmp")
+    path.mkdir(exist_ok=True)
+    return path.resolve()
 
 
 if __name__ == "__main__":

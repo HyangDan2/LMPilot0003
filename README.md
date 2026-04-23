@@ -195,6 +195,7 @@ python run.py --config config.yaml
   /build_doc_map
   /summarize_doc
   /summarize_doc --engineering True design_review.pptx
+  /summarize_docs
   /generate_markdown
   ```
 
@@ -205,6 +206,7 @@ python run.py --config config.yaml
   /extract_docs
   /build_doc_map
   /summarize_doc [--engineering True|False] [path]
+  /summarize_docs [--engineering True|False]
   /generate_markdown
   /workspace_status
   ```
@@ -213,6 +215,7 @@ python run.py --config config.yaml
   `/extract_docs` scans the attached folder and saves extracted document JSON plus a manifest.
   `/build_doc_map` builds a structural map from the latest extracted documents.
   `/summarize_doc` creates hierarchical LLM-backed summaries from extracted documents with bounded chunking and workspace-level synthesis. The default final workspace summary is organized into `Overall Summary`, `Features` (exactly 3 items), and `Next Action`. The prompt asks for a substantial minimum level of detail rather than relying on very large output-token caps. Use `--engineering True` to output `Features`, `Quantitative Information`, and `Recommended Action`. If a path is provided, it summarizes only that file from the attached folder.
+  `/summarize_docs` runs the same single-file summary flow sequentially for every supported document in the attached folder. Each processable document gets its own summary run under `HD2docpipe/summaries/`.
   `/generate_markdown` writes a deterministic markdown report from extracted evidence without any final LLM report-writing stage.
 
   Slash tools run in background workers so the GUI stays responsive. A session can run only one slash tool at a time, and Stop cancels the currently selected session's running slash tool or normal generation.
@@ -308,6 +311,7 @@ python run.py --config config.yaml
   /extract_docs
   /build_doc_map
   /summarize_doc
+  /summarize_docs
   /generate_markdown
   ```
 
