@@ -41,6 +41,7 @@ The saved workspace summary is structured into Overall Summary, Features (3 item
 With --engineering True, the saved summary uses Features, Quantitative Information, and Recommended Action.
 Summary output length is controlled by substantial minimum-detail prompt instructions; token budgets remain bounded safety caps.
 The saved workspace_summary.md formats prose with one sentence per line, including multi-sentence list items.
+If a reasoning-model backend returns reasoning without final content, the tool reports "Assistant: Reasoning..." and retries once for final answer content.
 
 /summarize_docs [--engineering True|False]
 Run /summarize_doc-style single-file summaries sequentially for every supported document in the attached folder.

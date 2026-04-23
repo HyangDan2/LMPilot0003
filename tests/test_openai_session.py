@@ -33,6 +33,15 @@ class FakeOpenAIClient:
             raise result
         return result
 
+    def chat_completion_with_reasoning_fallback(self, messages: list[dict[str, str]]) -> str:
+        try:
+            return self.chat_completion(messages)
+        except LLMClientError as exc:
+            if "reasoning only" not in str(exc):
+                raise
+            retry_messages = [{"role": "system", "content": "Reply again with only the final answer."}, *messages]
+            return self.chat_completion(retry_messages)
+
     def close_active_request(self) -> None:
         pass
 

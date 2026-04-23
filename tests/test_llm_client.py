@@ -299,6 +299,42 @@ class OpenAICompatibleClientTests(unittest.TestCase):
 
         self.assertIn("reasoning only", str(raised.exception))
 
+    def test_chat_completion_with_reasoning_fallback_retries_for_final_answer(self) -> None:
+        FakeConnection.responses.extend(
+            [
+                FakeResponse(
+                    200,
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": None,
+                                    "reasoning_content": "Thinking Process: inspect the source.",
+                                }
+                            }
+                        ]
+                    },
+                ),
+                FakeResponse(200, {"choices": [{"message": {"content": "final summary"}}]}),
+            ]
+        )
+        client = self.make_client(
+            OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model")
+        )
+        reasoning_events: list[str] = []
+
+        answer = client.chat_completion_with_reasoning_fallback(
+            [{"role": "user", "content": "Summarize"}],
+            on_reasoning=lambda: reasoning_events.append("reasoning"),
+        )
+
+        self.assertEqual(answer, "final summary")
+        self.assertEqual(reasoning_events, ["reasoning"])
+        self.assertEqual(len(FakeConnection.requests), 2)
+        retry_messages = FakeConnection.requests[1]["body"]["messages"]
+        self.assertEqual(retry_messages[0]["role"], "system")
+        self.assertIn("only the final answer", retry_messages[0]["content"])
+
     def test_chat_completion_tries_fallbacks_after_empty_content(self) -> None:
         FakeConnection.responses.append(
             FakeResponse(

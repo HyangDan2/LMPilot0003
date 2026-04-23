@@ -4,7 +4,7 @@ import http.client
 import json
 import threading
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
 
@@ -15,6 +15,12 @@ class LLMClientError(Exception):
 FINAL_TEXT_FIELD_FALLBACKS = ("text", "output_text")
 CHOICE_FINAL_TEXT_FIELDS = ("content", "output_text", "response", "completion")
 REASONING_TEXT_FIELDS = ("reasoning", "reasoning_content")
+REASONING_ONLY_ERROR = "Backend returned reasoning only, but no final assistant answer."
+FINAL_ANSWER_RETRY_INSTRUCTION = (
+    "The previous attempt returned reasoning without a final answer. "
+    "Reply again with only the final answer in the assistant content. "
+    "Do not include reasoning, thinking process, analysis, or hidden chain-of-thought."
+)
 
 
 @dataclass(frozen=True)
@@ -58,6 +64,30 @@ class OpenAICompatibleClient:
             payload["response_format"] = response_format
         data = self._request_json("POST", "/chat/completions", payload)
         return self._extract_chat_text(data)
+
+    def chat_completion_with_reasoning_fallback(
+        self,
+        messages: list[dict[str, Any]],
+        response_format: dict[str, Any] | None = None,
+        on_reasoning: Callable[[], None] | None = None,
+    ) -> str:
+        try:
+            return (
+                self.chat_completion(messages, response_format=response_format)
+                if response_format is not None
+                else self.chat_completion(messages)
+            )
+        except LLMClientError as exc:
+            if REASONING_ONLY_ERROR not in str(exc):
+                raise
+            if on_reasoning is not None:
+                on_reasoning()
+            retry_messages = self._with_final_answer_retry_instruction(messages)
+            return (
+                self.chat_completion(retry_messages, response_format=response_format)
+                if response_format is not None
+                else self.chat_completion(retry_messages)
+            )
 
     def stream_chat_completion(self, messages: list[dict[str, Any]]) -> Iterator[ChatStreamChunk]:
         self._validate_for_chat()
@@ -277,7 +307,7 @@ class OpenAICompatibleClient:
             return text
         reasoning = OpenAICompatibleClient._extract_reasoning_text(first_choice, strip=True)
         if reasoning:
-            raise LLMClientError("Backend returned reasoning only, but no final assistant answer.")
+            raise LLMClientError(REASONING_ONLY_ERROR)
         raise LLMClientError(
             "Malformed chat response: missing assistant content."
             f"{OpenAICompatibleClient._finish_reason_text(first_choice)} "
@@ -316,7 +346,7 @@ class OpenAICompatibleClient:
                 yield ChatStreamChunk(kind="reasoning")
 
         if not emitted_final_text and saw_reasoning:
-            raise LLMClientError("Backend returned reasoning only, but no final assistant answer.")
+            raise LLMClientError(REASONING_ONLY_ERROR)
         if not emitted_final_text:
             raise LLMClientError(
                 "Malformed streaming chat response: missing assistant content. "
@@ -385,6 +415,22 @@ class OpenAICompatibleClient:
     def _finish_reason_text(first_choice: dict[str, Any]) -> str:
         finish_reason = first_choice.get("finish_reason")
         return f" Finish reason: {finish_reason}." if isinstance(finish_reason, str) else ""
+
+    @staticmethod
+    def _with_final_answer_retry_instruction(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        retry_messages = [dict(message) for message in messages]
+        for message in retry_messages:
+            if message.get("role") == "system":
+                content = OpenAICompatibleClient._message_content_to_text(message.get("content", "")).strip()
+                message["content"] = f"{content}\n\n{FINAL_ANSWER_RETRY_INSTRUCTION}".strip()
+                return retry_messages
+        retry_messages.insert(0, {"role": "system", "content": FINAL_ANSWER_RETRY_INSTRUCTION})
+        return retry_messages
+
+    @staticmethod
+    def _message_content_to_text(content: Any) -> str:
+        text = OpenAICompatibleClient._extract_text_value(content, strip=True)
+        return text if text is not None else str(content)
 
     @staticmethod
     def _has_text(value: str | None, strip: bool) -> bool:

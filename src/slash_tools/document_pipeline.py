@@ -232,7 +232,7 @@ def summarize_doc_command(
     try:
         document_summaries, workspace_summary = summarize_documents_hierarchically(
             documents,
-            call_model=lambda messages, max_tokens: _chat_summary(client, messages, max_tokens),
+            call_model=lambda messages, max_tokens: _chat_summary(client, messages, max_tokens, progress),
             budget=budget,
             engineering=engineering,
             progress=lambda message: _emit_progress(progress, "status", message),
@@ -308,7 +308,7 @@ def summarize_docs_command(
             document = _document_for_single_file_summary(root, context, path, progress)
             document_summaries, workspace_summary = summarize_documents_hierarchically(
                 [document],
-                call_model=lambda messages, max_tokens: _chat_summary(client, messages, max_tokens),
+                call_model=lambda messages, max_tokens: _chat_summary(client, messages, max_tokens, progress),
                 budget=budget,
                 engineering=engineering,
                 progress=lambda message: _emit_progress(progress, "status", message),
@@ -583,13 +583,22 @@ def _chat_summary(
     client: OpenAICompatibleClient,
     messages: list[dict[str, str]],
     max_tokens: int,
+    progress=None,
 ) -> str:
     original_max_tokens = client.settings.max_tokens
     try:
         client.settings.max_tokens = max_tokens
-        return client.chat_completion(messages)
+        return client.chat_completion_with_reasoning_fallback(
+            messages,
+            on_reasoning=lambda: _emit_reasoning_progress(progress),
+        )
     finally:
         client.settings.max_tokens = original_max_tokens
+
+
+def _emit_reasoning_progress(progress) -> None:
+    _emit_progress(progress, "markdown", "Assistant: Reasoning...\n")
+    _emit_progress(progress, "status", "Recovering final answer from reasoning-only response...")
 
 
 def _emit_progress(progress, kind: str, text: str) -> None:

@@ -18,7 +18,12 @@ from .artifact_tools import (
     execute_artifact_requests,
     extract_artifact_requests,
 )
-from .llm_client import ChatStreamChunk, LLMClientError, OpenAICompatibleClient, OpenAIConnectionSettings
+from .llm_client import (
+    ChatStreamChunk,
+    LLMClientError,
+    OpenAICompatibleClient,
+    OpenAIConnectionSettings,
+)
 from .token_handler import ModelPrompt, message_content_to_text
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
@@ -48,13 +53,6 @@ DEFAULT_SERVER_STOP_SEQUENCES = [
     "\nHuman:",
     "\n### User:",
 ]
-
-REASONING_ONLY_ERROR = "Backend returned reasoning only, but no final assistant answer."
-FINAL_ANSWER_RETRY_INSTRUCTION = (
-    "The previous attempt returned reasoning without a final answer. "
-    "Reply again with only the final answer in the assistant content. "
-    "Do not include reasoning, thinking process, analysis, or hidden chain-of-thought."
-)
 
 BANNER_SKIP_PATTERNS = [
     re.compile(r"^available commands:\s*$", re.IGNORECASE),
@@ -192,13 +190,8 @@ class OpenAICompatibleSession:
 
     def _chat_completion_with_retry(self, messages: list[dict[str, Any]]) -> str:
         try:
-            return self._client.chat_completion(messages)
+            return self._client.chat_completion_with_reasoning_fallback(messages)
         except LLMClientError as exc:
-            if self._is_reasoning_only_error(exc):
-                try:
-                    return self._client.chat_completion(self._with_final_answer_retry_instruction(messages))
-                except LLMClientError as retry_exc:
-                    raise ConsoleSessionError(str(retry_exc)) from retry_exc
             raise ConsoleSessionError(str(exc)) from exc
 
     def _resolve_artifact_requests(self, messages: list[dict[str, Any]], answer: str) -> str:
@@ -226,21 +219,6 @@ class OpenAICompatibleSession:
                 return updated
         updated.insert(0, {"role": "system", "content": ARTIFACT_ACCESS_INSTRUCTION})
         return updated
-
-    @staticmethod
-    def _is_reasoning_only_error(exc: LLMClientError) -> bool:
-        return REASONING_ONLY_ERROR in str(exc)
-
-    @staticmethod
-    def _with_final_answer_retry_instruction(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        retry_messages = [dict(message) for message in messages]
-        for message in retry_messages:
-            if message.get("role") == "system":
-                content = message_content_to_text(message.get("content", "")).strip()
-                message["content"] = f"{content}\n\n{FINAL_ANSWER_RETRY_INSTRUCTION}".strip()
-                return retry_messages
-        retry_messages.insert(0, {"role": "system", "content": FINAL_ANSWER_RETRY_INSTRUCTION})
-        return retry_messages
 
     def test_connection(self) -> str:
         try:
