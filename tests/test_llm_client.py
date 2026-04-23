@@ -158,7 +158,7 @@ class OpenAICompatibleClientTests(unittest.TestCase):
                 (chunk.kind, chunk.text)
                 for chunk in client.stream_chat_completion([{"role": "user", "content": "Hi"}])
             ],
-            [("reasoning", "thinking"), ("final", "final answer")],
+            [("reasoning", ""), ("final", "final answer")],
         )
 
     def test_stream_chat_completion_errors_on_reasoning_only(self) -> None:
@@ -181,7 +181,7 @@ class OpenAICompatibleClientTests(unittest.TestCase):
                 for chunk in client.stream_chat_completion([{"role": "user", "content": "Hi"}])
             ],
             [
-                ("reasoning", "thinking"),
+                ("reasoning", ""),
                 ("final", '{\n  "choices": [\n    {\n      "delta": {\n        "reasoning": "thinking"\n      }\n    }\n  ]\n}'),
             ],
         )

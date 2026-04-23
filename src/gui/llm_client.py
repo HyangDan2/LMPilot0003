@@ -334,7 +334,7 @@ class OpenAICompatibleClient:
             if reasoning is not None and reasoning != "":
                 saw_reasoning = True
                 raw_reasoning_events.append(event)
-                yield ChatStreamChunk(kind="reasoning", text=reasoning)
+                yield ChatStreamChunk(kind="reasoning")
 
         if not emitted_final_text and saw_reasoning:
             yield ChatStreamChunk(

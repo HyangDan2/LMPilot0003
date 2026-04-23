@@ -927,9 +927,7 @@ class MainWindow(QMainWindow):
         if kind == 'reasoning':
             if self.current_session_id == session_id:
                 self._show_reasoning_placeholder()
-                if chunk:
-                    self._append_stream_text(chunk if chunk.endswith("\n") else f"{chunk}\n")
-                self._set_status('Reasoning...')
+                self._set_status('Analyzing response...')
             return
         if kind != 'final' or not chunk:
             return
@@ -1370,7 +1368,7 @@ class MainWindow(QMainWindow):
         cursor = self.chat_view.textCursor()
         cursor.movePosition(QTextCursor.End)
         self._reasoning_placeholder_start = cursor.position()
-        cursor.insertText('[Assistant]\nReasoning...\n\n')
+        cursor.insertText('[Assistant]\nProcessing...\n\n')
         self.chat_view.setTextCursor(cursor)
         self.chat_view.ensureCursorVisible()
 
