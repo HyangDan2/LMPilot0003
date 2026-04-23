@@ -19,7 +19,7 @@ window_height: 720
 response_token_reserve: 256
 max_prompt_chars: 12000
 recent_message_limit: 40
-rag_top_k: 5
+rag_top_k: 0
 rag_min_score: 0.2
 memory_context_char_limit: 4000
 last_working_folder: ""

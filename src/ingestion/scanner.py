@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 SUPPORTED_EXTENSIONS = {".pptx", ".docx", ".xlsx", ".pdf"}
-DEFAULT_EXCLUDED_DIR_NAMES = {"llm_result", "__pycache__", ".git", ".venv", "node_modules"}
+DEFAULT_EXCLUDED_DIR_NAMES = {"HD2docpipe", "__pycache__", ".git", ".venv", "node_modules"}
 
 
 def scan_supported_files(

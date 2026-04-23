@@ -6,7 +6,9 @@ from src.document_pipeline.high_level.summarize_doc import (
     _document_consolidation_prompt,
     _workspace_final_prompt,
     _workspace_group_prompt,
+    render_workspace_summary_markdown,
     SummaryBudget,
+    WorkspaceSummarySections,
 )
 from src.document_pipeline.schemas import DocumentMetadata, ExtractedBlock, ExtractedDocument, Provenance, SourceInfo
 
@@ -38,12 +40,44 @@ class SummarizeDocPromptTests(unittest.TestCase):
 
     def test_workspace_prompts_are_written_as_natural_language_requests(self) -> None:
         group_messages = _workspace_group_prompt("Document name: notes.pdf\nSummary:\nA spectrometer document.")
-        final_messages = _workspace_final_prompt(["A draft workspace summary."], SummaryBudget())
+        final_messages = _workspace_final_prompt(
+            [
+                WorkspaceSummarySections(
+                    overall_summary="A draft workspace summary.",
+                    features=["Feature one", "Feature two", "Feature three"],
+                    next_action="Follow up with the product team.",
+                )
+            ],
+            SummaryBudget(),
+        )
 
-        self.assertIn("Please write a concise workspace-level summary in natural language", group_messages[1]["content"])
+        self.assertIn("Please write a detailed workspace-level summary in natural language", group_messages[1]["content"])
+        self.assertIn('"Overall Summary", "Features", and "Next Action"', group_messages[1]["content"])
         self.assertNotIn("group 1/1", group_messages[1]["content"])
         self.assertIn("Please combine them into one final workspace summary", final_messages[1]["content"])
+        self.assertIn("list exactly 3 numbered items", final_messages[1]["content"])
         self.assertNotIn("Input budget", final_messages[1]["content"])
+
+    def test_summary_budget_doubles_output_token_allowances(self) -> None:
+        budget = SummaryBudget()
+
+        self.assertEqual(budget.per_doc_output_tokens, 480)
+        self.assertEqual(budget.consolidate_output_tokens, 720)
+        self.assertEqual(budget.workspace_output_tokens, 3000)
+
+    def test_workspace_summary_markdown_splits_plain_paragraph_sentences(self) -> None:
+        markdown = render_workspace_summary_markdown(
+            [],
+            WorkspaceSummarySections(
+                overall_summary="First sentence. Second sentence.",
+                features=["Feature one. Keep list intact.", "Feature two.", "Feature three."],
+                next_action="Review this. Then act.",
+            ),
+        )
+
+        self.assertIn("First sentence.\nSecond sentence.", markdown)
+        self.assertIn("1. Feature one. Keep list intact.", markdown)
+        self.assertIn("Review this.\nThen act.", markdown)
 
 
 def _sample_document() -> ExtractedDocument:

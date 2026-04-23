@@ -29,12 +29,11 @@ class ArtifactToolResult:
 
 ARTIFACT_ACCESS_INSTRUCTION = """Generated artifact access:
 If you need previously generated output files, request them with one of these tags:
-[read_output] document_pipeline/generated_report.md [/read_output]
-[list_outputs] document_pipeline [/list_outputs]
-Qwen-style aliases are also supported for generated outputs, such as:
-[read_file] llm/document_pipeline/generated_report.md [/read_file]
-[read_file] llm_output/document_pipeline/workspace_20260422_231501/workspace_summary.md [/read_file]
-Only generated files under llm_result/ and llm_output/ are available through these tags.
+[read_output] HD2docpipe/artifacts/generated_report.md [/read_output]
+[list_outputs] HD2docpipe/artifacts [/list_outputs]
+[read_file] HD2docpipe/artifacts/generated_report.md [/read_file]
+[read_file] HD2docpipe/summaries/workspace_20260422_231501/workspace_summary.md [/read_file]
+Only generated files under HD2docpipe/ are available through these tags.
 Do not say you lack authority to read generated artifacts; request them with the tag when needed."""
 
 
@@ -121,9 +120,9 @@ def resolve_output_artifact_path(working_folder: str | Path, requested_path: str
     root = Path(working_folder).expanduser().resolve()
     normalized = _normalize_artifact_request_path(requested_path)
     target = (root / normalized).expanduser().resolve()
-    allowed_roots = [(root / "llm_result").resolve(), (root / "llm_output").resolve()]
+    allowed_roots = [(root / "HD2docpipe").resolve()]
     if not any(target == artifact_root or artifact_root in target.parents for artifact_root in allowed_roots):
-        raise ValueError("Generated artifact access is limited to llm_result/ and llm_output/.")
+        raise ValueError("Generated artifact access is limited to HD2docpipe/.")
     return target
 
 
@@ -133,16 +132,14 @@ def _normalize_artifact_request_path(requested_path: str) -> Path:
         raw = raw[2:]
     if raw.startswith("/"):
         raise ValueError("Absolute paths are not allowed.")
-    if raw.startswith("llm/"):
-        raw = "llm_result/" + raw[len("llm/") :]
-    elif raw == "llm":
-        raw = "llm_result"
-    elif raw.startswith("llm_output/") or raw == "llm_output":
+    if raw.startswith("HD2docpipe/") or raw == "HD2docpipe":
         raw = raw
-    elif raw.startswith("document_pipeline/") or raw == "document_pipeline":
-        raw = "llm_result/" + raw
-    elif not raw.startswith("llm_result/") and raw != "llm_result":
-        raw = "llm_result/" + raw
+    elif raw.startswith("artifacts/") or raw == "artifacts":
+        raw = "HD2docpipe/" + raw
+    elif raw.startswith("summaries/") or raw == "summaries":
+        raw = "HD2docpipe/" + raw
+    elif not raw.startswith("HD2docpipe/") and raw != "HD2docpipe":
+        raw = "HD2docpipe/artifacts/" + raw
     path = Path(raw)
     if ".." in path.parts:
         raise ValueError("Path traversal is not allowed.")

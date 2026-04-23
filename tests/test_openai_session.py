@@ -112,13 +112,13 @@ class OpenAICompatibleSessionTests(unittest.TestCase):
     def test_artifact_request_reads_generated_report_and_retries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            report = root / "llm_result" / "document_pipeline" / "generated_report.md"
+            report = root / "HD2docpipe" / "artifacts" / "generated_report.md"
             report.parent.mkdir(parents=True)
             report.write_text("# Saved Report\n\nGenerated earlier.", encoding="utf-8")
             client = FakeOpenAIClient(
                 [],
                 chat_results=[
-                    "[read_file] llm/document_pipeline/generated_report.md [/read_file]",
+                    "[read_file] HD2docpipe/artifacts/generated_report.md [/read_file]",
                     "The saved report says: Generated earlier.",
                 ],
             )
@@ -135,13 +135,13 @@ class OpenAICompatibleSessionTests(unittest.TestCase):
     def test_artifact_request_stream_returns_final_followup(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            report = root / "llm_result" / "document_pipeline" / "generated_report.md"
+            report = root / "HD2docpipe" / "artifacts" / "generated_report.md"
             report.parent.mkdir(parents=True)
             report.write_text("# Saved Report\n\nGenerated earlier.", encoding="utf-8")
             client = FakeOpenAIClient(
                 [],
                 chat_results=[
-                    "[read_file] llm/document_pipeline/generated_report.md [/read_file]",
+                    "[read_file] HD2docpipe/artifacts/generated_report.md [/read_file]",
                     "final artifact answer",
                 ],
             )

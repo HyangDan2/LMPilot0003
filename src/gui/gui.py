@@ -61,6 +61,7 @@ from .token_handler import (
 )
 
 UNICODE_ESCAPE_RE = re.compile(r'\\u[0-9a-fA-F]{4}|/u[0-9a-fA-F]{4}')
+MAX_INPUT_HISTORY = 10
 
 
 def normalize_text_for_display(text: str) -> str:
@@ -251,6 +252,8 @@ class MainWindow(QMainWindow):
         self._rag_store = RagStore(app_config.db_path)
         self._rag_index_signature: tuple[tuple[str, int, int], ...] | None = None
         self._rag_settings_signature: tuple[str, str, str] | None = None
+        self._input_history: list[str] = []
+        self._input_history_index: int | None = None
 
         self.setWindowTitle(app_config.window_title)
         self.resize(app_config.window_width, app_config.window_height)
@@ -378,6 +381,8 @@ class MainWindow(QMainWindow):
         # Ctrl+Enter → Send
         self.send_shortcut = QShortcut(QKeySequence("Ctrl+Return"), self.input_edit)
         self.send_shortcut.activated.connect(self.on_send)
+        self.input_history_shortcut = QShortcut(QKeySequence("Ctrl+Up"), self.input_edit)
+        self.input_history_shortcut.activated.connect(self._recall_previous_input)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         for generation in list(self._active_generations.values()):
@@ -647,6 +652,7 @@ class MainWindow(QMainWindow):
         if self.current_session_id is not None and self.current_session_id in self._active_generations:
             QMessageBox.information(self, 'Send', 'This session is already generating a response.')
             return
+        self._remember_input_history(display_user_text)
         if display_user_text.startswith("/") and self._handle_slash_tool_command(display_user_text):
             self.input_edit.clear()
             return
@@ -708,6 +714,29 @@ class MainWindow(QMainWindow):
         self._set_status('Generating response...')
         self._start_worker(target_session_id, model_prompt, settings)
         self._refresh_controls()
+
+    def _remember_input_history(self, text: str) -> None:
+        normalized = normalize_prompt_text(text)
+        if not normalized:
+            return
+        self._input_history = [item for item in self._input_history if item != normalized]
+        self._input_history.insert(0, normalized)
+        del self._input_history[MAX_INPUT_HISTORY:]
+        self._input_history_index = None
+
+    @Slot()
+    def _recall_previous_input(self) -> None:
+        if not self._input_history:
+            return
+        if self._input_history_index is None:
+            self._input_history_index = 0
+        else:
+            self._input_history_index = min(self._input_history_index + 1, len(self._input_history) - 1)
+        self.input_edit.setPlainText(self._input_history[self._input_history_index])
+        cursor = self.input_edit.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        self.input_edit.setTextCursor(cursor)
+        self.input_edit.setFocus()
 
     def _handle_slash_tool_command(self, display_user_text: str) -> bool:
         if self.current_session_id is None:
@@ -1203,6 +1232,8 @@ class MainWindow(QMainWindow):
         query_text: str,
         settings: OpenAIConnectionSettings,
     ) -> str:
+        if self.app_config.rag_top_k <= 0:
+            return ""
         if not self._attached_file_paths:
             return ""
         normalized_query = normalize_prompt_text(query_text)

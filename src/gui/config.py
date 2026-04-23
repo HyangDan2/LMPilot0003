@@ -41,7 +41,7 @@ class AppConfig:
     openai_embedding_model: str = ""
     temperature: float = 0.7
     recent_message_limit: int = 40
-    rag_top_k: int = 5
+    rag_top_k: int = 0
     rag_min_score: float = 0.2
     rag_chunk_chars: int = 1200
     rag_chunk_overlap: int = 150
@@ -127,7 +127,7 @@ def load_config(path: str) -> AppConfig:
         openai_embedding_model=embedding_model,
         temperature=temperature,
         recent_message_limit=int(raw.get("recent_message_limit", 40)),
-        rag_top_k=int(raw.get("rag_top_k", 5)),
+        rag_top_k=int(raw.get("rag_top_k", 0)),
         rag_min_score=float(raw.get("rag_min_score", 0.2)),
         rag_chunk_chars=int(raw.get("rag_chunk_chars", 1200)),
         rag_chunk_overlap=int(raw.get("rag_chunk_overlap", 150)),

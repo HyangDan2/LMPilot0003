@@ -77,10 +77,10 @@ def generate_markdown_report(
             "",
             "## Artifacts",
             "",
-            "- `llm_result/document_pipeline/extracted_documents.json`",
-            "- `llm_result/document_pipeline/extraction_manifest.json`",
-            "- `llm_result/document_pipeline/document_map.json`",
-            "- `llm_result/document_pipeline/chunks.json`",
+            "- `HD2docpipe/artifacts/extracted_documents.json`",
+            "- `HD2docpipe/artifacts/extraction_manifest.json`",
+            "- `HD2docpipe/artifacts/document_map.json`",
+            "- `HD2docpipe/artifacts/chunks.json`",
         ]
     )
     return "\n".join(lines).rstrip() + "\n"

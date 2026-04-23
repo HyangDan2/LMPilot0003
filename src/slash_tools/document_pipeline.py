@@ -249,7 +249,7 @@ def summarize_doc_command(
         "run_name": run_name,
         "document_count": len(document_summaries),
         "target_path": _relative_to_root(target_path, root) if target_path is not None else None,
-        "workspace_summary": workspace_summary,
+        "workspace_summary": workspace_summary.to_dict(),
         "budgets": {
             "per_doc_input_chars": budget.per_doc_input_chars,
             "per_doc_output_tokens": budget.per_doc_output_tokens,
@@ -278,7 +278,10 @@ def summarize_doc_command(
     if target_path is not None:
         lines.append(f"- target_path: {_relative_to_root(target_path, root)}")
     lines.append(f"- output_run: {run_name}")
-    lines.append(f"- workspace_summary: {workspace_summary}")
+    lines.append("- workspace_summary_sections:")
+    lines.append(f"  overall_summary: {workspace_summary.overall_summary}")
+    lines.append(f"  features: {len(workspace_summary.features)} item(s)")
+    lines.append(f"  next_action: {workspace_summary.next_action}")
     return _result(
         "/summarize_doc",
         "\n".join(lines),

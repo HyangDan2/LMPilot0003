@@ -12,7 +12,7 @@ from src.document_pipeline.schemas import SourceInfo
 def pipeline_output_dir(working_folder: Path) -> Path:
     """Return the automatic artifact folder for document pipeline outputs."""
 
-    return working_folder.expanduser().resolve() / "llm_result" / "document_pipeline"
+    return working_folder.expanduser().resolve() / "HD2docpipe" / "artifacts"
 
 
 def pipeline_scoped_output_dir(working_folder: Path, scope_name: str) -> Path:
@@ -24,7 +24,7 @@ def pipeline_scoped_output_dir(working_folder: Path, scope_name: str) -> Path:
 def summary_output_dir(working_folder: Path) -> Path:
     """Return the automatic artifact folder for summary outputs."""
 
-    return working_folder.expanduser().resolve() / "llm_output" / "document_pipeline"
+    return working_folder.expanduser().resolve() / "HD2docpipe" / "summaries"
 
 
 def summary_run_output_dir(working_folder: Path, run_name: str) -> Path:
@@ -82,7 +82,8 @@ def save_document_summaries(working_folder: Path, payload: dict[str, Any], run_n
 def save_workspace_summary(working_folder: Path, markdown: str, run_name: str) -> Path:
     path = summary_run_output_dir(working_folder, run_name) / "workspace_summary.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(markdown, encoding="utf-8")
+    with path.open("w", encoding="utf-8", newline="\r\n") as f:
+        f.write(markdown)
     return path
 
 

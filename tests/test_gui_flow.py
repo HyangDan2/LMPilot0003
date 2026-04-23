@@ -205,6 +205,31 @@ class GuiFlowTests(unittest.TestCase):
         window.close()
         process_events(self.app, 5)
 
+    def test_ctrl_up_recalls_recent_input_history(self) -> None:
+        console = FakeConsole()
+        db_path = Path(tempfile.mkdtemp()) / "app.db"
+        window = MainWindow(
+            console,
+            ChatRepository(str(db_path)),
+            AppConfig(llama_cli_path="/bin/echo", model_path="/tmp/model.gguf", backend="cli"),
+        )
+
+        for index in range(12):
+            window._remember_input_history(f"/command_{index}")
+
+        self.assertEqual(len(window._input_history), 10)
+        self.assertEqual(window._input_history[0], "/command_11")
+        self.assertEqual(window._input_history[-1], "/command_2")
+
+        window._recall_previous_input()
+        self.assertEqual(window.input_edit.toPlainText(), "/command_11")
+
+        window._recall_previous_input()
+        self.assertEqual(window.input_edit.toPlainText(), "/command_10")
+
+        window.close()
+        process_events(self.app, 5)
+
     def test_attach_folder_replaces_existing_attachment_list(self) -> None:
         console = FakeConsole()
         db_path = Path(tempfile.mkdtemp()) / "app.db"
@@ -281,6 +306,42 @@ class GuiFlowTests(unittest.TestCase):
         self.assertTrue(any("Relevant retrieved context:" in message for message in system_messages))
         self.assertTrue(any("notes.txt" in message for message in system_messages))
         self.assertTrue(any("alpha semantic match" in message for message in system_messages))
+
+        window.close()
+        process_events(self.app, 5)
+
+    def test_rag_retrieval_is_disabled_by_default(self) -> None:
+        console = FakeConsole()
+        db_path = Path(tempfile.mkdtemp()) / "app.db"
+        attached_folder = Path(tempfile.mkdtemp())
+        attached_file = attached_folder / "notes.txt"
+        attached_file.write_text("alpha semantic match\nbeta context", encoding="utf-8")
+
+        window = MainWindow(
+            console,
+            ChatRepository(str(db_path)),
+            AppConfig(
+                llama_cli_path="/bin/echo",
+                model_path="/tmp/model.gguf",
+                backend="cli",
+                openai_base_url="http://example.test/v1",
+                openai_model="embedding-model",
+            ),
+        )
+        window._attached_file_paths = [str(attached_file.resolve())]
+        window._attachment_folder_roots[str(attached_file.resolve())] = str(attached_folder.resolve())
+        window._refresh_attachment_list()
+
+        with patch.object(OpenAICompatibleClient, "embeddings", side_effect=AssertionError("RAG should be disabled")):
+            window.input_edit.setPlainText("question about alpha")
+            window.on_send()
+            process_events(self.app)
+
+        prompt = console.prompts[-1]
+        self.assertIsInstance(prompt, ModelPrompt)
+        assert isinstance(prompt, ModelPrompt)
+        system_messages = [message["content"] for message in prompt.messages if message["role"] == "system"]
+        self.assertFalse(any("Relevant retrieved context:" in message for message in system_messages))
 
         window.close()
         process_events(self.app, 5)

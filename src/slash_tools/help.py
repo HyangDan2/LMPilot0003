@@ -37,14 +37,14 @@ Generate a deterministic markdown report from extracted evidence.
 /summarize_doc [PATH]
 Generate hierarchical LLM-backed summaries from extracted documents without sending the full raw corpus in one request.
 If PATH is given, summarize only that file inside the attached folder.
+The saved workspace summary is structured into Overall Summary, Features (3 items), and Next Action.
 
 Normal chat generated-artifact access:
 When a model needs a previous generated output, it can request:
-  [read_output] document_pipeline/generated_report.md [/read_output]
-  [list_outputs] document_pipeline [/list_outputs]
-Qwen-style aliases such as [read_file] llm/document_pipeline/generated_report.md [/read_file] are supported.
-[read_file] llm_output/document_pipeline/workspace_summary.md [/read_file] is also supported for summary output.
-Only files under the attached folder's llm_result/ and llm_output/ directories can be read or listed.
+  [read_output] HD2docpipe/artifacts/generated_report.md [/read_output]
+  [list_outputs] HD2docpipe/artifacts [/list_outputs]
+  [read_file] HD2docpipe/summaries/workspace_20260422_231501/workspace_summary.md [/read_file]
+Only files under the attached folder's HD2docpipe/ directory can be read or listed.
 
 Examples:
   /extract_single_doc design_review.pptx
@@ -75,21 +75,23 @@ Advanced evidence flow:
 3. Run /generate_markdown.
 
 Automatic saved outputs:
-- /extract_docs saves llm_result/document_pipeline/extracted_documents.json
-- /extract_docs saves llm_result/document_pipeline/extraction_manifest.json
-- /extract_single_doc saves llm_result/document_pipeline/FILE_SCOPE/documents/DOCUMENT_ID.json
-- /extract_single_doc saves llm_result/document_pipeline/FILE_SCOPE/extracted_documents.json
-- /build_doc_map saves llm_result/document_pipeline/document_map.json or llm_result/document_pipeline/FILE_SCOPE/document_map.json
-- /generate_markdown saves llm_result/document_pipeline/generated_report.md or llm_result/document_pipeline/FILE_SCOPE/generated_report.md
-- /summarize_doc saves llm_output/document_pipeline/RUN_NAME/document_summaries.json
-- /summarize_doc saves llm_output/document_pipeline/RUN_NAME/workspace_summary.md
+- /extract_docs saves HD2docpipe/artifacts/extracted_documents.json
+- /extract_docs saves HD2docpipe/artifacts/extraction_manifest.json
+- /extract_single_doc saves HD2docpipe/artifacts/FILE_SCOPE/documents/DOCUMENT_ID.json
+- /extract_single_doc saves HD2docpipe/artifacts/FILE_SCOPE/extracted_documents.json
+- /build_doc_map saves HD2docpipe/artifacts/document_map.json or HD2docpipe/artifacts/FILE_SCOPE/document_map.json
+- /generate_markdown saves HD2docpipe/artifacts/generated_report.md or HD2docpipe/artifacts/FILE_SCOPE/generated_report.md
+- /summarize_doc saves HD2docpipe/summaries/RUN_NAME/document_summaries.json
+- /summarize_doc saves HD2docpipe/summaries/RUN_NAME/workspace_summary.md
+- /summarize_doc stores structured workspace_summary fields in document_summaries.json:
+  overall_summary, features, next_action
 
 Summary run naming:
 - Folder-wide summaries use workspace_TIMESTAMP
 - Single-file summaries use FILE_STEM_TIMESTAMP
 
 Single-file pipeline scopes:
-- Single-file extraction and follow-up artifacts use llm_result/document_pipeline/FILE_SCOPE/
+- Single-file extraction and follow-up artifacts use HD2docpipe/artifacts/FILE_SCOPE/
 
 Not included yet:
 - summarize_map
