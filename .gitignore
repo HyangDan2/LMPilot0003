@@ -21,3 +21,4 @@ BRANCH_STATUS_AND_TODO.md
 *.key
 secrets.json
 /.test_tmp
+/.test_tmp/
