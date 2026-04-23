@@ -15,6 +15,27 @@ class LLMClientError(Exception):
 FINAL_TEXT_FIELD_FALLBACKS = ("text", "output_text")
 CHOICE_FINAL_TEXT_FIELDS = ("content", "output_text", "response", "completion")
 REASONING_TEXT_FIELDS = ("reasoning", "reasoning_content")
+LENGTH_RECOVERY_MAX_ATTEMPTS = 1
+LENGTH_RECOVERY_SUMMARY_CHAR_THRESHOLD = 1600
+LENGTH_RECOVERY_SUMMARY_MAX_TOKENS = 192
+LENGTH_RECOVERY_TAIL_CHARS = 800
+LENGTH_RECOVERY_SUMMARY_PROMPT = (
+    "Compress the assistant draft below into a compact coverage note. "
+    "Preserve only what has already been answered, keep the original order, "
+    "and do not add any new information."
+)
+LENGTH_RECOVERY_CONTINUE_PROMPT = (
+    "Your previous answer was cut off because of the token limit. "
+    "Continue from the next missing point only. "
+    "Do not restart, do not repeat completed sections, and do not add meta commentary."
+)
+
+
+@dataclass(frozen=True)
+class ChatCompletionResult:
+    text: str
+    finish_reason: str | None = None
+    reasoning_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -46,6 +67,13 @@ class OpenAICompatibleClient:
         messages: list[dict[str, Any]],
         response_format: dict[str, Any] | None = None,
     ) -> str:
+        return self._chat_completion_result(messages, response_format=response_format).text
+
+    def _chat_completion_result(
+        self,
+        messages: list[dict[str, Any]],
+        response_format: dict[str, Any] | None = None,
+    ) -> ChatCompletionResult:
         self._validate_for_chat()
         payload: dict[str, Any] = {
             "model": self.settings.model.strip(),
@@ -57,7 +85,7 @@ class OpenAICompatibleClient:
         if response_format is not None:
             payload["response_format"] = response_format
         data = self._request_json("POST", "/chat/completions", payload)
-        return self._extract_chat_text(data)
+        return self._extract_chat_result(data)
 
     def chat_completion_with_reasoning_fallback(
         self,
@@ -65,18 +93,25 @@ class OpenAICompatibleClient:
         response_format: dict[str, Any] | None = None,
         on_reasoning: Callable[[int, str], None] | None = None,
     ) -> str:
-        return self._chat_completion_once(messages, response_format=response_format)
+        del on_reasoning
+        result = self._chat_completion_once(messages, response_format=response_format)
+        if (
+            response_format is None
+            and result.finish_reason == "length"
+            and result.text.strip()
+            and not result.reasoning_only
+        ):
+            continuation = self._continue_after_length_limit(messages, result.text)
+            if continuation:
+                return f"{result.text.rstrip()}\n\n{continuation.lstrip()}"
+        return result.text
 
     def _chat_completion_once(
         self,
         messages: list[dict[str, Any]],
         response_format: dict[str, Any] | None = None,
-    ) -> str:
-        return (
-            self.chat_completion(messages, response_format=response_format)
-            if response_format is not None
-            else self.chat_completion(messages)
-        )
+    ) -> ChatCompletionResult:
+        return self._chat_completion_result(messages, response_format=response_format)
 
     def stream_chat_completion(self, messages: list[dict[str, Any]]) -> Iterator[ChatStreamChunk]:
         self._validate_for_chat()
@@ -88,7 +123,8 @@ class OpenAICompatibleClient:
             "stream": True,
         }
         yield from self._extract_stream_chat_text(
-            self._request_stream_events("POST", "/chat/completions", payload)
+            self._request_stream_events("POST", "/chat/completions", payload),
+            messages,
         )
 
     def embeddings(self, inputs: list[str], model: str | None = None) -> list[list[float]]:
@@ -277,7 +313,7 @@ class OpenAICompatibleClient:
         return f"{base}{suffix}" if base else suffix
 
     @staticmethod
-    def _extract_chat_text(data: dict[str, Any]) -> str:
+    def _extract_chat_result(data: dict[str, Any]) -> ChatCompletionResult:
         choices = data.get("choices")
         if not isinstance(choices, list) or not choices:
             raise LLMClientError("Malformed chat response: missing choices.")
@@ -287,27 +323,37 @@ class OpenAICompatibleClient:
                 "Malformed chat response: choice is not an object. "
                 f"First choice: {OpenAICompatibleClient._preview_payload(first_choice)}"
             )
+        finish_reason = OpenAICompatibleClient._extract_finish_reason(first_choice)
         text = OpenAICompatibleClient._extract_choice_text(
             first_choice,
             strip=True,
             include_reasoning=False,
         )
         if text:
-            return text
+            return ChatCompletionResult(text=text, finish_reason=finish_reason)
         reasoning = OpenAICompatibleClient._extract_reasoning_text(first_choice, strip=True)
         if reasoning:
-            return OpenAICompatibleClient._pretty_json(data)
+            return ChatCompletionResult(
+                text=OpenAICompatibleClient._pretty_json(data),
+                finish_reason=finish_reason,
+                reasoning_only=True,
+            )
         raise LLMClientError(
             "Malformed chat response: missing assistant content."
             f"{OpenAICompatibleClient._finish_reason_text(first_choice)} "
             f"First choice: {OpenAICompatibleClient._preview_payload(first_choice)}"
         )
 
-    @staticmethod
-    def _extract_stream_chat_text(events: Iterator[dict[str, Any]]) -> Iterator[ChatStreamChunk]:
+    def _extract_stream_chat_text(
+        self,
+        events: Iterator[dict[str, Any]],
+        messages: list[dict[str, Any]],
+    ) -> Iterator[ChatStreamChunk]:
         emitted_final_text = False
         saw_reasoning = False
         raw_reasoning_events: list[dict[str, Any]] = []
+        final_parts: list[str] = []
+        last_finish_reason: str | None = None
         last_choice: Any = None
         for event in events:
             choices = event.get("choices")
@@ -320,6 +366,9 @@ class OpenAICompatibleClient:
                     "Malformed streaming chat response: choice is not an object. "
                     f"First choice: {OpenAICompatibleClient._preview_payload(first_choice)}"
                 )
+            finish_reason = OpenAICompatibleClient._extract_finish_reason(first_choice)
+            if finish_reason is not None:
+                last_finish_reason = finish_reason
             text = OpenAICompatibleClient._extract_choice_text(
                 first_choice,
                 strip=False,
@@ -327,6 +376,7 @@ class OpenAICompatibleClient:
             )
             if text is not None and text != "":
                 emitted_final_text = True
+                final_parts.append(text)
                 yield ChatStreamChunk(kind="final", text=text)
                 continue
 
@@ -347,6 +397,10 @@ class OpenAICompatibleClient:
                 "Malformed streaming chat response: missing assistant content. "
                 f"First choice: {OpenAICompatibleClient._preview_payload(last_choice)}"
             )
+        if last_finish_reason == "length":
+            continuation = self._continue_after_length_limit(messages, "".join(final_parts))
+            if continuation:
+                yield ChatStreamChunk(kind="final", text=continuation)
 
     @staticmethod
     def _extract_choice_text(
@@ -407,9 +461,80 @@ class OpenAICompatibleClient:
         return None
 
     @staticmethod
-    def _finish_reason_text(first_choice: dict[str, Any]) -> str:
+    def _extract_finish_reason(first_choice: dict[str, Any]) -> str | None:
         finish_reason = first_choice.get("finish_reason")
+        return finish_reason if isinstance(finish_reason, str) else None
+
+    @staticmethod
+    def _finish_reason_text(first_choice: dict[str, Any]) -> str:
+        finish_reason = OpenAICompatibleClient._extract_finish_reason(first_choice)
         return f" Finish reason: {finish_reason}." if isinstance(finish_reason, str) else ""
+
+    def _continue_after_length_limit(self, messages: list[dict[str, Any]], partial_text: str) -> str:
+        for _ in range(LENGTH_RECOVERY_MAX_ATTEMPTS):
+            followup_messages = self._build_length_recovery_messages(messages, partial_text)
+            followup_result = self._chat_completion_once(followup_messages)
+            if followup_result.reasoning_only or not followup_result.text.strip():
+                return ""
+            continuation = self._remove_duplicate_prefix(followup_result.text, partial_text)
+            if followup_result.finish_reason != "length":
+                return continuation
+            if continuation.strip():
+                partial_text = f"{partial_text.rstrip()}\n\n{continuation.lstrip()}"
+        return ""
+
+    def _build_length_recovery_messages(
+        self,
+        messages: list[dict[str, Any]],
+        partial_text: str,
+    ) -> list[dict[str, Any]]:
+        followup_messages = [dict(message) for message in messages]
+        recovery_context = self._summarize_for_length_recovery(partial_text)
+        followup_messages.append({"role": "assistant", "content": partial_text[-LENGTH_RECOVERY_TAIL_CHARS:]})
+        followup_messages.append(
+            {
+                "role": "user",
+                "content": (
+                    f"{LENGTH_RECOVERY_CONTINUE_PROMPT}\n\n"
+                    f"Already covered summary:\n{recovery_context}\n\n"
+                    f"Last exact excerpt:\n{partial_text[-LENGTH_RECOVERY_TAIL_CHARS:]}"
+                ),
+            }
+        )
+        return followup_messages
+
+    def _summarize_for_length_recovery(self, partial_text: str) -> str:
+        compact_source = partial_text.strip()
+        if len(compact_source) <= LENGTH_RECOVERY_SUMMARY_CHAR_THRESHOLD:
+            return compact_source
+
+        original_max_tokens = self.settings.max_tokens
+        try:
+            self.settings.max_tokens = min(original_max_tokens, LENGTH_RECOVERY_SUMMARY_MAX_TOKENS)
+            summary_result = self._chat_completion_once(
+                [
+                    {"role": "system", "content": LENGTH_RECOVERY_SUMMARY_PROMPT},
+                    {"role": "user", "content": compact_source},
+                ]
+            )
+        finally:
+            self.settings.max_tokens = original_max_tokens
+
+        if summary_result.reasoning_only or not summary_result.text.strip():
+            return compact_source[-LENGTH_RECOVERY_SUMMARY_CHAR_THRESHOLD:]
+        return summary_result.text.strip()
+
+    @staticmethod
+    def _remove_duplicate_prefix(new_text: str, existing_text: str) -> str:
+        trimmed_new = new_text.lstrip()
+        trimmed_existing = existing_text.rstrip()
+        if not trimmed_new:
+            return ""
+        max_overlap = min(len(trimmed_new), len(trimmed_existing), 400)
+        for overlap in range(max_overlap, 0, -1):
+            if trimmed_existing.endswith(trimmed_new[:overlap]):
+                return trimmed_new[overlap:]
+        return trimmed_new
 
     @staticmethod
     def _message_content_to_text(content: Any) -> str:

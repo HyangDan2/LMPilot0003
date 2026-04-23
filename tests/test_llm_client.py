@@ -364,6 +364,100 @@ class OpenAICompatibleClientTests(unittest.TestCase):
         self.assertEqual(reasoning_events, [])
         self.assertEqual(len(FakeConnection.requests), 1)
 
+    def test_chat_completion_with_reasoning_fallback_recovers_length_limited_answer(self) -> None:
+        FakeConnection.responses.extend(
+            [
+                FakeResponse(
+                    200,
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "length",
+                                "message": {"content": "Part one ends here."},
+                            }
+                        ]
+                    },
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"content": "Part two continues."},
+                            }
+                        ]
+                    },
+                ),
+            ]
+        )
+        client = self.make_client(
+            OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model")
+        )
+
+        answer = client.chat_completion_with_reasoning_fallback([{"role": "user", "content": "Explain"}])
+
+        self.assertEqual(answer, "Part one ends here.\n\nPart two continues.")
+        self.assertEqual(len(FakeConnection.requests), 2)
+        followup_messages = FakeConnection.requests[1]["body"]["messages"]
+        self.assertEqual(followup_messages[-2]["role"], "assistant")
+        self.assertIn("Part one ends here.", followup_messages[-2]["content"])
+        self.assertEqual(followup_messages[-1]["role"], "user")
+        self.assertIn("cut off because of the token limit", followup_messages[-1]["content"])
+
+    def test_chat_completion_with_reasoning_fallback_summarizes_long_partial_before_recovery(self) -> None:
+        long_text = "A" * 1800
+        FakeConnection.responses.extend(
+            [
+                FakeResponse(
+                    200,
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "length",
+                                "message": {"content": long_text},
+                            }
+                        ]
+                    },
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"content": "Covered topics summary"},
+                            }
+                        ]
+                    },
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"content": "Remaining details."},
+                            }
+                        ]
+                    },
+                ),
+            ]
+        )
+        client = self.make_client(
+            OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model", max_tokens=512)
+        )
+
+        answer = client.chat_completion_with_reasoning_fallback([{"role": "user", "content": "Explain"}])
+
+        self.assertTrue(answer.endswith("Remaining details."))
+        self.assertEqual(len(FakeConnection.requests), 3)
+        summary_request = FakeConnection.requests[1]["body"]
+        self.assertEqual(summary_request["messages"][0]["role"], "system")
+        self.assertIn("Compress the assistant draft", summary_request["messages"][0]["content"])
+        followup_request = FakeConnection.requests[2]["body"]
+        self.assertIn("Covered topics summary", followup_request["messages"][-1]["content"])
+
     def test_chat_completion_tries_fallbacks_after_empty_content(self) -> None:
         FakeConnection.responses.append(
             FakeResponse(
@@ -413,6 +507,46 @@ class OpenAICompatibleClientTests(unittest.TestCase):
         self.assertIn("Finish reason: stop.", message)
         self.assertIn("finish_reason", message)
         self.assertIn("image", message)
+
+    def test_stream_chat_completion_appends_length_recovery_continuation(self) -> None:
+        FakeConnection.responses.extend(
+            [
+                FakeStreamingResponse(
+                    200,
+                    [
+                        'data: {"choices":[{"delta":{"content":"Part one "}}]}\n',
+                        'data: {"choices":[{"delta":{"content":"ends here."},"finish_reason":"length"}]}\n',
+                        "data: [DONE]\n",
+                    ],
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {"content": "Part two continues."},
+                            }
+                        ]
+                    },
+                ),
+            ]
+        )
+        client = self.make_client(
+            OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model")
+        )
+
+        chunks = list(client.stream_chat_completion([{"role": "user", "content": "Explain"}]))
+
+        self.assertEqual(
+            [(chunk.kind, chunk.text) for chunk in chunks],
+            [
+                ("final", "Part one "),
+                ("final", "ends here."),
+                ("final", "Part two continues."),
+            ],
+        )
+        self.assertEqual(len(FakeConnection.requests), 2)
 
     def test_list_models_uses_base_url_prefix(self) -> None:
         FakeConnection.responses.append(
