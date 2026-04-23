@@ -40,6 +40,8 @@ class AppConfig:
     openai_model: str = ""
     openai_embedding_model: str = ""
     temperature: float = 0.7
+    reasoning_followup_max_attempts: int = 10
+    reasoning_display_max_chars: int = 4000
     recent_message_limit: int = 40
     rag_top_k: int = 0
     rag_min_score: float = 0.2
@@ -57,6 +59,8 @@ class AppConfig:
             temperature=self.temperature,
             max_tokens=self.n_predict,
             timeout=self.response_timeout,
+            reasoning_followup_max_attempts=self.reasoning_followup_max_attempts,
+            reasoning_display_max_chars=self.reasoning_display_max_chars,
         )
 
 
@@ -126,6 +130,8 @@ def load_config(path: str) -> AppConfig:
         openai_model=model,
         openai_embedding_model=embedding_model,
         temperature=temperature,
+        reasoning_followup_max_attempts=int(raw.get("reasoning_followup_max_attempts", 10)),
+        reasoning_display_max_chars=int(raw.get("reasoning_display_max_chars", 4000)),
         recent_message_limit=int(raw.get("recent_message_limit", 40)),
         rag_top_k=int(raw.get("rag_top_k", 0)),
         rag_min_score=float(raw.get("rag_min_score", 0.2)),
@@ -155,6 +161,8 @@ def load_connection_settings(path: str) -> OpenAIConnectionSettings:
         temperature=float(raw.get("temperature", 0.7)),
         max_tokens=int(raw.get("max_tokens", 512)),
         timeout=float(raw.get("timeout", 180.0)),
+        reasoning_followup_max_attempts=int(raw.get("reasoning_followup_max_attempts", 10)),
+        reasoning_display_max_chars=int(raw.get("reasoning_display_max_chars", 4000)),
     )
 
 

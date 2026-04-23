@@ -927,6 +927,8 @@ class MainWindow(QMainWindow):
         if kind == 'reasoning':
             if self.current_session_id == session_id:
                 self._show_reasoning_placeholder()
+                if chunk:
+                    self._append_stream_text(chunk if chunk.endswith("\n") else f"{chunk}\n")
                 self._set_status('Reasoning...')
             return
         if kind != 'final' or not chunk:

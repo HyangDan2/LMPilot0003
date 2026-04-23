@@ -216,7 +216,7 @@ python run.py --config config.yaml
   `/build_doc_map` builds a structural map from the latest extracted documents.
   `/summarize_doc` creates hierarchical LLM-backed summaries from extracted documents with bounded chunking and workspace-level synthesis. The default final workspace summary is organized into `Overall Summary`, `Features` (exactly 3 items), and `Next Action`. The prompt asks for a substantial minimum level of detail rather than relying on very large output-token caps. Use `--engineering True` to output `Features`, `Quantitative Information`, and `Recommended Action`. If a path is provided, it summarizes only that file from the attached folder.
   `/summarize_docs` runs the same single-file summary flow sequentially for every supported document in the attached folder. Each processable document gets its own summary run under `HD2docpipe/summaries/`.
-  Reasoning-model backends that return `reasoning` or `reasoning_content` without final assistant content are handled automatically: the UI reports `Assistant: Reasoning...`, then the app retries once for final answer content and stores only the final answer.
+  Reasoning-model backends that return `reasoning` or `reasoning_content` without final assistant content are handled automatically: the UI reports `Assistant: Reasoning...`, keeps reasoning visible, and continues follow-up requests (up to the configured limit) until final answer content is returned.
   `/generate_markdown` writes a deterministic markdown report from extracted evidence without any final LLM report-writing stage.
 
   Slash tools run in background workers so the GUI stays responsive. A session can run only one slash tool at a time, and Stop cancels the currently selected session's running slash tool or normal generation.
@@ -457,7 +457,7 @@ Short output can be normal if the model gives a concise answer, but check these 
 
 `/summarize_doc` uses its own internal summary budget and final output structure. The token budget is a safety cap, not a guaranteed output length. Summary length is primarily controlled by the workspace prompt instructions in `src/document_pipeline/high_level/summarize_doc.py`, which specify substantial minimum paragraph, sentence, bullet, and action counts for standard and engineering summaries. The rendered `workspace_summary.md` also formats prose so each sentence starts on its own line, including multi-sentence list items.
 
-For reasoning-model backends such as Qwen variants, the OpenAI-compatible client automatically detects `reasoning` / `reasoning_content` responses that contain no final assistant content. It shows a short `Assistant: Reasoning...` status and retries once with a final-answer-only instruction. The reasoning text itself is not saved to chat history or summary artifacts.
+For reasoning-model backends such as Qwen variants, the OpenAI-compatible client automatically detects `reasoning` / `reasoning_content` responses that contain no final assistant content. It shows `Assistant: Reasoning...` with streamed reasoning text and continues follow-up requests until final answer content appears or the follow-up limit is reached (`reasoning_followup_max_attempts`, default `10`). Follow-up reasoning text is display-oriented and bounded by `reasoning_display_max_chars`.
 
 The app does not send fallback stop sequences to `/v1/chat/completions`; those stop sequences are only used for raw `/completion` fallback to prevent runaway dialogue.
 

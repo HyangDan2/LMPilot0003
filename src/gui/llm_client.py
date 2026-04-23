@@ -12,14 +12,18 @@ class LLMClientError(Exception):
     pass
 
 
+class ReasoningOnlyError(LLMClientError):
+    def __init__(self, reasoning: str) -> None:
+        super().__init__(REASONING_ONLY_ERROR)
+        self.reasoning = reasoning
+
+
 FINAL_TEXT_FIELD_FALLBACKS = ("text", "output_text")
 CHOICE_FINAL_TEXT_FIELDS = ("content", "output_text", "response", "completion")
 REASONING_TEXT_FIELDS = ("reasoning", "reasoning_content")
 REASONING_ONLY_ERROR = "Backend returned reasoning only, but no final assistant answer."
-FINAL_ANSWER_RETRY_INSTRUCTION = (
-    "The previous attempt returned reasoning without a final answer. "
-    "Reply again with only the final answer in the assistant content. "
-    "Do not include reasoning, thinking process, analysis, or hidden chain-of-thought."
+FINAL_ANSWER_FOLLOWUP_INSTRUCTION = (
+    "Continue from the previous reasoning and provide the final answer for the original request."
 )
 
 
@@ -38,6 +42,8 @@ class OpenAIConnectionSettings:
     temperature: float = 0.7
     max_tokens: int = 512
     timeout: float = 180.0
+    reasoning_followup_max_attempts: int = 10
+    reasoning_display_max_chars: int = 4000
 
 
 class OpenAICompatibleClient:
@@ -69,25 +75,29 @@ class OpenAICompatibleClient:
         self,
         messages: list[dict[str, Any]],
         response_format: dict[str, Any] | None = None,
-        on_reasoning: Callable[[], None] | None = None,
+        on_reasoning: Callable[[int, str], None] | None = None,
     ) -> str:
-        try:
-            return (
-                self.chat_completion(messages, response_format=response_format)
-                if response_format is not None
-                else self.chat_completion(messages)
-            )
-        except LLMClientError as exc:
-            if REASONING_ONLY_ERROR not in str(exc):
-                raise
-            if on_reasoning is not None:
-                on_reasoning()
-            retry_messages = self._with_final_answer_retry_instruction(messages)
-            return (
-                self.chat_completion(retry_messages, response_format=response_format)
-                if response_format is not None
-                else self.chat_completion(retry_messages)
-            )
+        active_messages = [dict(message) for message in messages]
+        max_attempts = max(1, self.settings.reasoning_followup_max_attempts)
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self._chat_completion_once(active_messages, response_format=response_format)
+            except ReasoningOnlyError as exc:
+                if on_reasoning is not None:
+                    on_reasoning(attempt, self._display_reasoning(exc.reasoning))
+                active_messages = self._with_reasoning_followup(active_messages, exc.reasoning)
+        raise LLMClientError(f"Backend returned reasoning only after {max_attempts} follow-up attempts.")
+
+    def _chat_completion_once(
+        self,
+        messages: list[dict[str, Any]],
+        response_format: dict[str, Any] | None = None,
+    ) -> str:
+        return (
+            self.chat_completion(messages, response_format=response_format)
+            if response_format is not None
+            else self.chat_completion(messages)
+        )
 
     def stream_chat_completion(self, messages: list[dict[str, Any]]) -> Iterator[ChatStreamChunk]:
         self._validate_for_chat()
@@ -307,7 +317,7 @@ class OpenAICompatibleClient:
             return text
         reasoning = OpenAICompatibleClient._extract_reasoning_text(first_choice, strip=True)
         if reasoning:
-            raise LLMClientError(REASONING_ONLY_ERROR)
+            raise ReasoningOnlyError(reasoning)
         raise LLMClientError(
             "Malformed chat response: missing assistant content."
             f"{OpenAICompatibleClient._finish_reason_text(first_choice)} "
@@ -318,6 +328,7 @@ class OpenAICompatibleClient:
     def _extract_stream_chat_text(events: Iterator[dict[str, Any]]) -> Iterator[ChatStreamChunk]:
         emitted_final_text = False
         saw_reasoning = False
+        reasoning_parts: list[str] = []
         last_choice: Any = None
         for event in events:
             choices = event.get("choices")
@@ -343,10 +354,11 @@ class OpenAICompatibleClient:
             reasoning = OpenAICompatibleClient._extract_reasoning_text(first_choice, strip=False)
             if reasoning is not None and reasoning != "":
                 saw_reasoning = True
-                yield ChatStreamChunk(kind="reasoning")
+                reasoning_parts.append(reasoning)
+                yield ChatStreamChunk(kind="reasoning", text=reasoning)
 
         if not emitted_final_text and saw_reasoning:
-            raise LLMClientError(REASONING_ONLY_ERROR)
+            raise ReasoningOnlyError("".join(reasoning_parts))
         if not emitted_final_text:
             raise LLMClientError(
                 "Malformed streaming chat response: missing assistant content. "
@@ -416,16 +428,18 @@ class OpenAICompatibleClient:
         finish_reason = first_choice.get("finish_reason")
         return f" Finish reason: {finish_reason}." if isinstance(finish_reason, str) else ""
 
-    @staticmethod
-    def _with_final_answer_retry_instruction(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        retry_messages = [dict(message) for message in messages]
-        for message in retry_messages:
-            if message.get("role") == "system":
-                content = OpenAICompatibleClient._message_content_to_text(message.get("content", "")).strip()
-                message["content"] = f"{content}\n\n{FINAL_ANSWER_RETRY_INSTRUCTION}".strip()
-                return retry_messages
-        retry_messages.insert(0, {"role": "system", "content": FINAL_ANSWER_RETRY_INSTRUCTION})
-        return retry_messages
+    def _with_reasoning_followup(self, messages: list[dict[str, Any]], reasoning: str) -> list[dict[str, Any]]:
+        followup_messages = [dict(message) for message in messages]
+        followup_messages.append({"role": "assistant", "content": self._display_reasoning(reasoning)})
+        followup_messages.append({"role": "user", "content": FINAL_ANSWER_FOLLOWUP_INSTRUCTION})
+        return followup_messages
+
+    def _display_reasoning(self, reasoning: str) -> str:
+        limit = max(0, self.settings.reasoning_display_max_chars)
+        text = reasoning.strip()
+        if limit and len(text) > limit:
+            return f"{text[:limit].rstrip()}\n\n[Reasoning truncated for display: {len(text) - limit} chars omitted.]"
+        return text
 
     @staticmethod
     def _message_content_to_text(content: Any) -> str:
