@@ -15,9 +15,13 @@ class LLMClientError(Exception):
 FINAL_TEXT_FIELD_FALLBACKS = ("text", "output_text")
 CHOICE_FINAL_TEXT_FIELDS = ("content", "output_text", "response", "completion")
 REASONING_TEXT_FIELDS = ("reasoning", "reasoning_content")
-LENGTH_BUDGET_MAX_ATTEMPTS = 3
-LENGTH_BUDGET_REDUCTION_FACTOR = 0.5
-LENGTH_BUDGET_MIN_TOKENS = 96
+LENGTH_RECOVERY_MAX_ATTEMPTS = 1
+LENGTH_RECOVERY_CONTEXT_CHARS = 1600
+LENGTH_RECOVERY_TAIL_CHARS = 1000
+LENGTH_RECOVERY_CONTINUE_PROMPT = (
+    "Continue exactly from the next unfinished point. "
+    "Do not restart. Do not repeat completed text."
+)
 
 
 @dataclass(frozen=True)
@@ -25,7 +29,9 @@ class ChatCompletionResult:
     text: str
     finish_reason: str | None = None
     reasoning_only: bool = False
+    reasoning_text: str = ""
     raw_json: str = ""
+    has_final_text: bool = False
 
 
 @dataclass(frozen=True)
@@ -85,8 +91,10 @@ class OpenAICompatibleClient:
     ) -> str:
         del on_reasoning
         result = self._chat_completion_once(messages, response_format=response_format)
-        if response_format is None:
-            return self._resolve_length_limited_result(messages, result)
+        if response_format is None and result.finish_reason == "length":
+            recovered = self._recover_length_limited_result(messages, result)
+            if recovered is not None:
+                return recovered
         return result.text
 
     def _chat_completion_once(
@@ -318,6 +326,7 @@ class OpenAICompatibleClient:
                 text=text,
                 finish_reason=finish_reason,
                 raw_json=raw_json,
+                has_final_text=True,
             )
         reasoning = OpenAICompatibleClient._extract_reasoning_text(first_choice, strip=True)
         if reasoning:
@@ -325,6 +334,7 @@ class OpenAICompatibleClient:
                 text=raw_json,
                 finish_reason=finish_reason,
                 reasoning_only=finish_reason != "length",
+                reasoning_text=reasoning,
                 raw_json=raw_json,
             )
         raise LLMClientError(
@@ -379,9 +389,17 @@ class OpenAICompatibleClient:
 
         if not emitted_final_text and saw_reasoning:
             if last_finish_reason == "length":
-                regenerated = self._retry_with_reduced_budget(messages)
-                if regenerated is not None:
-                    yield ChatStreamChunk(kind="replace", text=regenerated.text)
+                recovered = self._recover_length_limited_result(
+                    messages,
+                    ChatCompletionResult(
+                        text=OpenAICompatibleClient._pretty_json_lines(raw_reasoning_events),
+                        finish_reason=last_finish_reason,
+                        reasoning_text="".join(reasoning_parts),
+                        raw_json=OpenAICompatibleClient._pretty_json_lines(raw_reasoning_events),
+                    ),
+                )
+                if recovered is not None:
+                    yield ChatStreamChunk(kind="final", text=recovered)
                     return
             yield ChatStreamChunk(
                 kind="final",
@@ -394,9 +412,19 @@ class OpenAICompatibleClient:
                 f"First choice: {OpenAICompatibleClient._preview_payload(last_choice)}"
             )
         if last_finish_reason == "length":
-            regenerated = self._retry_with_reduced_budget(messages)
-            if regenerated is not None:
-                yield ChatStreamChunk(kind="replace", text=regenerated.text)
+            recovered = self._recover_length_limited_result(
+                messages,
+                ChatCompletionResult(
+                    text="".join(final_parts),
+                    finish_reason=last_finish_reason,
+                    raw_json="",
+                    has_final_text=True,
+                ),
+            )
+            if recovered is not None:
+                continuation = self._extract_continuation_text("".join(final_parts), recovered)
+                if continuation:
+                    yield ChatStreamChunk(kind="final", text=continuation)
 
     @staticmethod
     def _extract_choice_text(
@@ -466,41 +494,106 @@ class OpenAICompatibleClient:
         finish_reason = OpenAICompatibleClient._extract_finish_reason(first_choice)
         return f" Finish reason: {finish_reason}." if isinstance(finish_reason, str) else ""
 
-    def _resolve_length_limited_result(
+    def _recover_length_limited_result(
         self,
         messages: list[dict[str, Any]],
         result: ChatCompletionResult,
-    ) -> str:
-        if result.finish_reason != "length":
-            return result.text
-        regenerated = self._retry_with_reduced_budget(messages)
-        if regenerated is not None:
-            return regenerated.text
-        return result.raw_json or result.text
+    ) -> str | None:
+        seed_text = result.text if result.has_final_text else result.reasoning_text.strip()
+        if not seed_text:
+            return result.raw_json or result.text or None
+        continuation = self._continue_after_length_limit(messages, seed_text)
+        if continuation:
+            if result.has_final_text:
+                return f"{result.text.rstrip()}\n\n{continuation.lstrip()}"
+            return continuation
+        if result.raw_json:
+            return result.raw_json
+        return result.text or None
 
-    def _retry_with_reduced_budget(
+    def _continue_after_length_limit(self, messages: list[dict[str, Any]], partial_text: str) -> str:
+        for _ in range(LENGTH_RECOVERY_MAX_ATTEMPTS):
+            followup_messages = self._build_length_recovery_messages(messages, partial_text)
+            followup_result = self._chat_completion_once(followup_messages)
+            continuation_source = (
+                followup_result.text if followup_result.has_final_text else followup_result.reasoning_text.strip()
+            )
+            if not continuation_source:
+                return ""
+            continuation = self._remove_duplicate_prefix(continuation_source, partial_text)
+            if followup_result.finish_reason != "length":
+                return continuation
+            if continuation.strip():
+                partial_text = f"{partial_text.rstrip()}\n\n{continuation.lstrip()}"
+        return ""
+
+    def _build_length_recovery_messages(
         self,
         messages: list[dict[str, Any]],
-    ) -> ChatCompletionResult | None:
-        original_max_tokens = self.settings.max_tokens
-        retry_budget = original_max_tokens
-        last_result: ChatCompletionResult | None = None
-        try:
-            for _ in range(LENGTH_BUDGET_MAX_ATTEMPTS):
-                next_budget = max(
-                    LENGTH_BUDGET_MIN_TOKENS,
-                    int(retry_budget * LENGTH_BUDGET_REDUCTION_FACTOR),
-                )
-                if next_budget >= retry_budget:
-                    break
-                retry_budget = next_budget
-                self.settings.max_tokens = retry_budget
-                last_result = self._chat_completion_once(messages)
-                if last_result.finish_reason != "length":
-                    return last_result
-            return last_result
-        finally:
-            self.settings.max_tokens = original_max_tokens
+        partial_text: str,
+    ) -> list[dict[str, Any]]:
+        followup_messages = [dict(message) for message in messages]
+        recovery_context = self._shorten_partial_for_length_recovery(partial_text)
+        tail_excerpt = partial_text[-LENGTH_RECOVERY_TAIL_CHARS:]
+        followup_messages.append({"role": "assistant", "content": recovery_context})
+        followup_messages.append(
+            {
+                "role": "user",
+                "content": (
+                    f"{LENGTH_RECOVERY_CONTINUE_PROMPT}\n\n"
+                    f"Continue after this exact tail excerpt:\n{tail_excerpt}"
+                ),
+            }
+        )
+        return followup_messages
+
+    @staticmethod
+    def _shorten_partial_for_length_recovery(partial_text: str) -> str:
+        compact_source = partial_text.strip()
+        if len(compact_source) <= LENGTH_RECOVERY_CONTEXT_CHARS:
+            return compact_source
+
+        paragraphs = [part.strip() for part in compact_source.split("\n\n") if part.strip()]
+        selected: list[str] = []
+        total = 0
+        for paragraph in reversed(paragraphs):
+            addition = len(paragraph) + (2 if selected else 0)
+            if selected and total + addition > LENGTH_RECOVERY_CONTEXT_CHARS:
+                break
+            if not selected and len(paragraph) >= LENGTH_RECOVERY_CONTEXT_CHARS:
+                return paragraph[-LENGTH_RECOVERY_CONTEXT_CHARS:]
+            selected.append(paragraph)
+            total += addition
+            if total >= LENGTH_RECOVERY_CONTEXT_CHARS:
+                break
+        if selected:
+            shortened = "\n\n".join(reversed(selected))
+            if len(shortened) <= LENGTH_RECOVERY_CONTEXT_CHARS:
+                return shortened
+            return shortened[-LENGTH_RECOVERY_CONTEXT_CHARS:]
+        return compact_source[-LENGTH_RECOVERY_CONTEXT_CHARS:]
+
+    @staticmethod
+    def _remove_duplicate_prefix(new_text: str, existing_text: str) -> str:
+        trimmed_new = new_text.lstrip()
+        trimmed_existing = existing_text.rstrip()
+        if not trimmed_new:
+            return ""
+        max_overlap = min(len(trimmed_new), len(trimmed_existing), 400)
+        for overlap in range(max_overlap, 0, -1):
+            if trimmed_existing.endswith(trimmed_new[:overlap]):
+                return trimmed_new[overlap:]
+        return trimmed_new
+
+    @staticmethod
+    def _extract_continuation_text(existing_text: str, recovered_text: str) -> str:
+        if not recovered_text.strip():
+            return ""
+        if recovered_text == existing_text:
+            return ""
+        if recovered_text.startswith(existing_text):
+            return recovered_text[len(existing_text):].lstrip("\n")
+        return OpenAICompatibleClient._remove_duplicate_prefix(recovered_text, existing_text)
 
     @staticmethod
     def _message_content_to_text(content: Any) -> str:
