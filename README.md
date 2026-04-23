@@ -194,6 +194,7 @@ python run.py --config config.yaml
   /extract_docs
   /build_doc_map
   /summarize_doc
+  /summarize_doc --engineering True design_review.pptx
   /generate_markdown
   ```
 
@@ -203,7 +204,7 @@ python run.py --config config.yaml
   /extract_single_doc <path>
   /extract_docs
   /build_doc_map
-  /summarize_doc [path]
+  /summarize_doc [--engineering True|False] [path]
   /generate_markdown
   /workspace_status
   ```
@@ -211,7 +212,7 @@ python run.py --config config.yaml
   `/extract_single_doc` extracts one supported file and saves a per-document JSON artifact.
   `/extract_docs` scans the attached folder and saves extracted document JSON plus a manifest.
   `/build_doc_map` builds a structural map from the latest extracted documents.
-  `/summarize_doc` creates hierarchical LLM-backed summaries from extracted documents with bounded chunking and workspace-level synthesis. The final workspace summary is organized into `Overall Summary`, `Features` (exactly 3 items), and `Next Action`. If a path is provided, it summarizes only that file from the attached folder.
+  `/summarize_doc` creates hierarchical LLM-backed summaries from extracted documents with bounded chunking and workspace-level synthesis. The default final workspace summary is organized into `Overall Summary`, `Features` (exactly 3 items), and `Next Action`. The prompt asks for a substantial minimum level of detail rather than relying on very large output-token caps. Use `--engineering True` to output `Features`, `Quantitative Information`, and `Recommended Action`. If a path is provided, it summarizes only that file from the attached folder.
   `/generate_markdown` writes a deterministic markdown report from extracted evidence without any final LLM report-writing stage.
 
   Slash tools run in background workers so the GUI stays responsive. A session can run only one slash tool at a time, and Stop cancels the currently selected session's running slash tool or normal generation.
@@ -260,9 +261,24 @@ python run.py --config config.yaml
   ```json
   {
     "workspace_summary": {
+      "mode": "standard",
       "overall_summary": "...",
       "features": ["...", "...", "..."],
       "next_action": "..."
+    }
+  }
+  ```
+
+  Engineering mode stores this shape:
+
+  ```json
+  {
+    "summary_mode": "engineering",
+    "workspace_summary": {
+      "mode": "engineering",
+      "features": ["...", "...", "..."],
+      "quantitative_information": "...",
+      "recommended_action": "..."
     }
   }
   ```
@@ -434,7 +450,7 @@ Short output can be normal if the model gives a concise answer, but check these 
 * `n_predict`: maximum generated tokens. Increase it for longer answers.
 * `server_endpoint`: keep it as `auto` so chat completions are preferred.
 
-`/summarize_doc` uses its own internal summary budget and final output structure. If summary sections are still too brief, adjust the defaults in `src/document_pipeline/high_level/summarize_doc.py`, especially `SummaryBudget` and the workspace prompt instructions.
+`/summarize_doc` uses its own internal summary budget and final output structure. The token budget is a safety cap, not a guaranteed output length. Summary length is primarily controlled by the workspace prompt instructions in `src/document_pipeline/high_level/summarize_doc.py`, which specify substantial minimum paragraph, sentence, bullet, and action counts for standard and engineering summaries. The rendered `workspace_summary.md` also formats prose so each sentence starts on its own line, including multi-sentence list items.
 
 The app does not send fallback stop sequences to `/v1/chat/completions`; those stop sequences are only used for raw `/completion` fallback to prevent runaway dialogue.
 

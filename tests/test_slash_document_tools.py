@@ -24,6 +24,19 @@ class SlashDocumentToolsTests(unittest.TestCase):
             f"{label} next action."
         )
 
+    @staticmethod
+    def _engineering_workspace_summary(label: str) -> str:
+        return (
+            "Features\n"
+            f"1. {label} feature one.\n"
+            f"2. {label} feature two.\n"
+            f"3. {label} feature three.\n\n"
+            "Quantitative Information\n"
+            f"{label} uses 10 ms latency and 3 retries.\n\n"
+            "Recommended Action\n"
+            f"{label} validate engineering limits."
+        )
+
     def test_help_lists_document_pipeline_tools_and_saved_outputs(self) -> None:
         result = run_slash_command("/help", None, SlashToolContext())
 
@@ -226,6 +239,34 @@ class SlashDocumentToolsTests(unittest.TestCase):
         self.assertEqual(payload["target_path"], "notes.pdf")
         self.assertTrue(run_dir.name.startswith("notes_"))
         self.assertIn("target_path: notes.pdf", result.text)
+
+    def test_summarize_doc_engineering_mode_changes_workspace_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            save_extracted_documents(root, [_sample_document(root, name="notes.pdf", doc_id="doc_notes")])
+            context = SlashToolContext(
+                llm_settings=OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model")
+            )
+
+            def fake_chat_completion(client, messages):
+                self.assertIn("Quantitative Information", messages[-1]["content"])
+                return SlashDocumentToolsTests._engineering_workspace_summary("Engineering")
+
+            with patch("src.slash_tools.document_pipeline.OpenAICompatibleClient.chat_completion", new=fake_chat_completion):
+                result = run_slash_command("/summarize_doc --engineering True notes.pdf", root, context)
+
+            run_dir = next((root / "HD2docpipe" / "summaries").iterdir())
+            payload = json.loads((run_dir / "document_summaries.json").read_text(encoding="utf-8"))
+            workspace_text = (run_dir / "workspace_summary.md").read_text(encoding="utf-8")
+
+        assert result is not None
+        self.assertEqual(payload["summary_mode"], "engineering")
+        self.assertEqual(payload["workspace_summary"]["mode"], "engineering")
+        self.assertIn("## Features", workspace_text)
+        self.assertIn("## Quantitative Information", workspace_text)
+        self.assertIn("## Recommended Action", workspace_text)
+        self.assertNotIn("## Overall Summary", workspace_text)
+        self.assertIn("mode: engineering", result.text)
 
     def test_summarize_doc_path_auto_extracts_target_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -35,6 +35,11 @@ def sentence_per_line_markdown(markdown: str) -> str:
             flush_paragraph()
             formatted.append(line)
             continue
+        list_lines = _split_list_item_sentences(line)
+        if list_lines is not None:
+            flush_paragraph()
+            formatted.extend(list_lines)
+            continue
         if _is_structural_markdown(stripped):
             flush_paragraph()
             formatted.append(line)
@@ -49,13 +54,21 @@ def _is_structural_markdown(stripped: str) -> bool:
         stripped.startswith("#")
         or stripped.startswith("|")
         or stripped.startswith(">")
-        or stripped.startswith("- ")
-        or stripped.startswith("* ")
-        or stripped.startswith("+ ")
-        or bool(re.match(r"\d+[.)]\s", stripped))
     )
 
 
 def _split_sentences(text: str) -> list[str]:
     sentences = [sentence.strip() for sentence in SENTENCE_BOUNDARY_RE.split(text) if sentence.strip()]
     return sentences or [text]
+
+
+def _split_list_item_sentences(line: str) -> list[str] | None:
+    match = re.match(r"^(\s*(?:[-*+]|\d+[.)])\s+)(.*)$", line)
+    if match is None:
+        return None
+    prefix, body = match.groups()
+    sentences = _split_sentences(body.strip())
+    if len(sentences) <= 1:
+        return [line]
+    continuation_prefix = " " * len(prefix)
+    return [f"{prefix}{sentences[0]}", *[f"{continuation_prefix}{sentence}" for sentence in sentences[1:]]]

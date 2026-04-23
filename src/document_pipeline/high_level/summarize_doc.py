@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
 from typing import Callable
@@ -20,6 +20,32 @@ SUMMARY_SYSTEM_PROMPT = (
     "Do not explain your task. "
     "Do not mention prompts, chunks, token limits, budgets, or instructions. "
     "Do not expose reasoning, planning, or analysis."
+)
+
+SECTION_TITLE_ALIASES = {
+    "overall summary": "overall summary",
+    "features": "features",
+    "feature": "features",
+    "next action": "next action",
+    "next actions": "next action",
+    "nextaction": "next action",
+    "nextactions": "next action",
+    "quantitative information": "quantitative information",
+    "quantitative info": "quantitative information",
+    "quantitativeinformation": "quantitative information",
+    "quantitativeinfo": "quantitative information",
+    "recommended action": "recommended action",
+    "recommended actions": "recommended action",
+    "recommendedaction": "recommended action",
+    "recommendedactions": "recommended action",
+    "recommened action": "recommended action",
+    "recommened actions": "recommended action",
+    "recommenedaction": "recommended action",
+    "recommenedactions": "recommended action",
+}
+
+SECTION_TITLE_PATTERN = "|".join(
+    re.escape(title) for title in sorted(SECTION_TITLE_ALIASES, key=len, reverse=True)
 )
 
 
@@ -59,18 +85,47 @@ class DocumentSummaryArtifact:
 
 @dataclass(frozen=True)
 class WorkspaceSummarySections:
-    overall_summary: str
-    features: list[str]
-    next_action: str
+    overall_summary: str = ""
+    features: list[str] = field(default_factory=list)
+    next_action: str = ""
+    quantitative_information: str = ""
+    recommended_action: str = ""
+    mode: str = "standard"
 
     def to_dict(self) -> dict[str, object]:
+        if self.mode == "engineering":
+            return {
+                "mode": self.mode,
+                "features": list(self.features),
+                "quantitative_information": self.quantitative_information,
+                "recommended_action": self.recommended_action,
+            }
         return {
+            "mode": self.mode,
             "overall_summary": self.overall_summary,
             "features": list(self.features),
             "next_action": self.next_action,
         }
 
     def to_text(self) -> str:
+        if self.mode == "engineering":
+            lines = [
+                "Features:",
+            ]
+            lines.extend(f"{index}. {feature}" for index, feature in enumerate(self.features, start=1))
+            if not self.features:
+                lines.append("(missing)")
+            lines.extend(
+                [
+                    "",
+                    "Quantitative Information:",
+                    self.quantitative_information.strip() or "(missing)",
+                    "",
+                    "Recommended Action:",
+                    self.recommended_action.strip() or "(missing)",
+                ]
+            )
+            return "\n".join(lines)
         lines = [
             "Overall Summary:",
             self.overall_summary.strip() or "(missing)",
@@ -94,6 +149,7 @@ def summarize_documents_hierarchically(
     documents: list[ExtractedDocument],
     call_model: SummaryModelCaller,
     budget: SummaryBudget | None = None,
+    engineering: bool = False,
     progress: Callable[[str], None] | None = None,
     cancel_requested: Callable[[], bool] | None = None,
 ) -> tuple[list[DocumentSummaryArtifact], WorkspaceSummarySections]:
@@ -116,6 +172,7 @@ def summarize_documents_hierarchically(
         document_summaries,
         call_model=call_model,
         budget=active_budget,
+        engineering=engineering,
         cancel_requested=cancel_requested,
     )
     return document_summaries, workspace_summary
@@ -163,9 +220,17 @@ def summarize_workspace(
     document_summaries: list[DocumentSummaryArtifact],
     call_model: SummaryModelCaller,
     budget: SummaryBudget,
+    engineering: bool = False,
     cancel_requested: Callable[[], bool] | None = None,
 ) -> WorkspaceSummarySections:
     if not document_summaries:
+        if engineering:
+            return WorkspaceSummarySections(
+                features=[],
+                quantitative_information="No extracted documents are available.",
+                recommended_action="Run extraction before requesting a summary.",
+                mode="engineering",
+            )
         return WorkspaceSummarySections(
             overall_summary="No extracted documents are available.",
             features=[],
@@ -181,9 +246,10 @@ def summarize_workspace(
         group_summaries.append(
             _parse_workspace_summary_sections(
                 call_model(
-                    _workspace_group_prompt(group),
+                    _workspace_group_prompt(group, engineering=engineering),
                     budget.workspace_output_tokens,
-                ).strip()
+                ).strip(),
+                engineering=engineering,
             )
         )
 
@@ -193,9 +259,10 @@ def summarize_workspace(
     _raise_if_cancelled(cancel_requested)
     return _parse_workspace_summary_sections(
         call_model(
-            _workspace_final_prompt(group_summaries, budget),
+            _workspace_final_prompt(group_summaries, budget, engineering=engineering),
             budget.workspace_output_tokens,
-        ).strip()
+        ).strip(),
+        engineering=engineering,
     )
 
 
@@ -206,16 +273,41 @@ def render_workspace_summary_markdown(
     lines = [
         "# Workspace Summary",
         "",
+    ]
+    if workspace_summary.mode == "engineering":
+        lines.extend(
+            [
+                "## Features",
+                "",
+            ]
+        )
+        rendered_features = workspace_summary.features or ["No distinct features were identified."]
+        for index, feature in enumerate(rendered_features, start=1):
+            lines.extend([f"{index}. {_compact_multiline_text(feature)}", ""])
+        lines.extend(
+            [
+                "## Quantitative Information",
+                "",
+                workspace_summary.quantitative_information.strip(),
+                "",
+                "## Recommended Action",
+                "",
+                workspace_summary.recommended_action.strip(),
+            ]
+        )
+        return sentence_per_line_markdown("\n".join(lines).rstrip() + "\n")
+
+    lines.extend([
         "## Overall Summary",
         "",
         workspace_summary.overall_summary.strip(),
         "",
         "## Features",
         "",
-    ]
+    ])
     rendered_features = workspace_summary.features or ["No distinct features were identified."]
     for index, feature in enumerate(rendered_features, start=1):
-        lines.extend([f"{index}. {feature.strip()}", ""])
+        lines.extend([f"{index}. {_compact_multiline_text(feature)}", ""])
     lines.extend(
         [
             "## Next Action",
@@ -321,9 +413,10 @@ def _document_chunk_prompt(
         {
             "role": "user",
             "content": (
-                f'Please read the following excerpts from the document "{title}". '
-                "Write a detailed factual summary in natural language. "
-                "Focus on the main topics, notable claims, capabilities, limitations, and uncertainties that are directly supported by the text.\n\n"
+                f'Please read the following excerpts from the document "{title}" and write a detailed factual summary. '
+                "Cover the main topics, important claims, concrete capabilities, limitations, risks, assumptions, and uncertainties that are directly supported by the text. "
+                "Preserve specific numbers, names, dates, technical terms, component names, and decision-relevant details when they appear. "
+                "Do not invent missing context; say only what the excerpts support.\n\n"
                 f"Document path: {document.source.path}\n\n"
                 "Document excerpts:\n"
                 f"{excerpt_group}"
@@ -347,9 +440,10 @@ def _document_consolidation_prompt(
         {
             "role": "user",
             "content": (
-                f'The notes below each summarize different excerpts from the document "{title}". '
-                "Please merge them into one coherent summary that reads naturally and avoids repetition. "
-                "Keep the result focused on the content of the document itself, and preserve specific important details when they are supported by the notes.\n\n"
+                f'The notes below summarize different excerpts from the document "{title}". '
+                "Merge them into one coherent document-level summary that reads naturally and avoids repetition. "
+                "Keep the summary focused on the document itself, preserve supported specifics, and retain concrete quantitative or technical details that may matter later. "
+                "If the notes disagree or leave gaps, describe the uncertainty without adding unsupported facts.\n\n"
                 f"Document path: {document.source.path}\n\n"
                 "Summary notes:\n"
                 f"{joined[: budget.consolidate_input_chars]}"
@@ -358,7 +452,30 @@ def _document_consolidation_prompt(
     ]
 
 
-def _workspace_group_prompt(group: str) -> PromptMessages:
+def _workspace_group_prompt(group: str, engineering: bool = False) -> PromptMessages:
+    if engineering:
+        instruction = (
+            "Write an engineering-focused workspace summary from these document summaries. "
+            'Use exactly these sections: "Features", "Quantitative Information", and "Recommended Action". '
+            "Do not add a report title, do not use bold Markdown headings, and do not repeat or nest section headings inside another section. "
+            "Do not be terse; prefer detailed, source-grounded explanations over short labels. "
+            "Features must contain exactly 3 numbered items describing engineering capabilities, architecture/design points, constraints, interfaces, workflows, or implementation-relevant behaviors; write at least 8 sentences for each feature. "
+            "Quantitative Information should collect concrete values from the source, such as limits, counts, dimensions, rates, latencies, capacities, dates, versions, thresholds, percentages, or measured results; include units when available and aim for 12 to 20 bullets when the source supports them. "
+            "Recommended Action should be practical, implementation-focused, grounded in the extracted material, and include at least 10 actionable steps. "
+            "If evidence is limited, explain what is known and what is not specified instead of shortening the section. "
+            "Prioritize details that would help an engineer plan, verify, debug, implement, or evaluate the system.\n\n"
+        )
+    else:
+        instruction = (
+            "Write a detailed workspace-level summary from these document summaries. "
+            'Use exactly these sections: "Overall Summary", "Features", and "Next Action". '
+            "Target roughly 60% Overall Summary, 30% Features, and 10% Next Action. "
+            "Do not be terse; prefer detailed, source-grounded explanations over short labels. "
+            "Overall Summary should explain the main themes, important facts, scope, relationships, differences across documents, and notable uncertainties in at least 6 paragraphs. "
+            "Features must contain exactly 3 numbered items describing the most important capabilities, characteristics, or findings; write at least 6 sentences for each item. "
+            "Next Action should provide at least 4 concrete actions grounded in the documents. "
+            "If evidence is limited, explain what is known and what is not specified instead of shortening the section.\n\n"
+        )
     return [
         {
             "role": "system",
@@ -367,22 +484,42 @@ def _workspace_group_prompt(group: str) -> PromptMessages:
         {
             "role": "user",
             "content": (
-                "Below are summaries of documents from the same workspace. "
-                "Please write a detailed workspace-level summary in natural language using exactly these sections: "
-                '"Overall Summary", "Features", and "Next Action". '
-                "Make Overall Summary the longest section and keep it near 60% of the response. "
-                "In Features, list exactly 3 numbered items totaling about 30% of the response. "
-                "In Next Action, write one short practical recommendation grounded in the documents, totaling about 10% of the response. "
-                "Highlight the main themes, important facts, and meaningful differences across the documents.\n\n"
-                "Document summaries:\n"
+                f"{instruction}"
+                "Summaries:\n"
                 f"{group}"
             ),
         },
     ]
 
 
-def _workspace_final_prompt(group_summaries: list[WorkspaceSummarySections], budget: SummaryBudget) -> PromptMessages:
+def _workspace_final_prompt(
+    group_summaries: list[WorkspaceSummarySections],
+    budget: SummaryBudget,
+    engineering: bool = False,
+) -> PromptMessages:
     joined = "\n\n".join(summary.to_text().strip() for summary in group_summaries)
+    if engineering:
+        instruction = (
+            "Combine these draft engineering summaries into one source-grounded final engineering summary. "
+            'Use exactly these sections: "Features", "Quantitative Information", and "Recommended Action". '
+            "Do not add a report title, do not use bold Markdown headings, and do not repeat or nest section headings inside another section. "
+            "Do not be terse; prefer detailed, source-grounded explanations over short labels. "
+            "Features must contain exactly 3 numbered engineering capabilities, design points, constraints, interfaces, workflows, or implementation-relevant behaviors; write at least 8 sentences for each feature. "
+            "Quantitative Information should preserve concrete source values, including units, limits, counts, dimensions, rates, dates, versions, thresholds, or measured results, and aim for 12 to 20 bullets when the drafts support them. "
+            "Recommended Action should be practical, implementation-focused, based only on the provided drafts, and include at least 10 actionable steps. "
+            "If evidence is limited, explain what is known and what is not specified instead of shortening the section.\n\n"
+        )
+    else:
+        instruction = (
+            "Combine these draft workspace summaries into one coherent, source-grounded final summary. "
+            'Use exactly these sections: "Overall Summary", "Features", and "Next Action". '
+            "Target roughly 60% Overall Summary, 30% Features, and 10% Next Action. "
+            "Do not be terse; prefer detailed, source-grounded explanations over short labels. "
+            "Overall Summary should synthesize the workspace-level themes, facts, relationships, differences, and uncertainties in at least 6 paragraphs. "
+            "Features must contain exactly 3 numbered items with the most important capabilities, characteristics, or findings; write at least 6 sentences for each item. "
+            "Next Action should provide at least 4 concrete actions grounded in the drafts. "
+            "If evidence is limited, explain what is known and what is not specified instead of shortening the section.\n\n"
+        )
     return [
         {
             "role": "system",
@@ -391,22 +528,24 @@ def _workspace_final_prompt(group_summaries: list[WorkspaceSummarySections], bud
         {
             "role": "user",
             "content": (
-                "Below are draft workspace summaries created from different subsets of the same workspace. "
-                "Please combine them into one final workspace summary that reads naturally and stays focused on the source material. "
-                'Use exactly these sections: "Overall Summary", "Features", and "Next Action". '
-                "Make Overall Summary the longest section and keep it near 60% of the response. "
-                "In Features, list exactly 3 numbered items totaling about 30% of the response. "
-                "In Next Action, write one short practical recommendation grounded in the documents, totaling about 10% of the response.\n\n"
-                "Draft workspace summaries:\n"
+                f"{instruction}"
+                "Drafts:\n"
                 f"{joined[: budget.workspace_input_chars]}"
             ),
         },
     ]
 
 
-def _parse_workspace_summary_sections(text: str) -> WorkspaceSummarySections:
+def _parse_workspace_summary_sections(text: str, engineering: bool = False) -> WorkspaceSummarySections:
     normalized = text.strip()
     if not normalized:
+        if engineering:
+            return WorkspaceSummarySections(
+                features=[],
+                quantitative_information="",
+                recommended_action="",
+                mode="engineering",
+            )
         return WorkspaceSummarySections(
             overall_summary="",
             features=[],
@@ -414,6 +553,24 @@ def _parse_workspace_summary_sections(text: str) -> WorkspaceSummarySections:
         )
 
     sections = _extract_titled_sections(normalized)
+    if engineering:
+        features_text = _clean_section_body(sections.get("features", ""))
+        quantitative_information = _clean_section_body(sections.get("quantitative information", ""))
+        recommended_action = _clean_section_body(sections.get("recommended action", ""))
+        if not sections:
+            return WorkspaceSummarySections(
+                features=[],
+                quantitative_information=normalized,
+                recommended_action="",
+                mode="engineering",
+            )
+        return WorkspaceSummarySections(
+            features=_parse_feature_items(features_text)[:3],
+            quantitative_information=quantitative_information,
+            recommended_action=recommended_action,
+            mode="engineering",
+        )
+
     overall_summary = _clean_section_body(sections.get("overall summary", ""))
     features_text = _clean_section_body(sections.get("features", ""))
     next_action = _clean_section_body(sections.get("next action", ""))
@@ -440,7 +597,7 @@ def _parse_workspace_summary_sections(text: str) -> WorkspaceSummarySections:
 def _extract_titled_sections(text: str) -> dict[str, str]:
     matches = list(
         re.finditer(
-            r"(?im)^(?:##\s*)?(Overall Summary|Features|Next Action)\s*:?\s*$",
+            rf"(?im)^\s*(?:#{{1,6}}\s*)?(?:\*\*|__)?\s*({SECTION_TITLE_PATTERN})\s*(?:\*\*|__)?\s*:?\s*$",
             text,
         )
     )
@@ -449,7 +606,7 @@ def _extract_titled_sections(text: str) -> dict[str, str]:
 
     sections: dict[str, str] = {}
     for index, match in enumerate(matches):
-        title = match.group(1).strip().lower()
+        title = SECTION_TITLE_ALIASES[match.group(1).strip().lower()]
         start = match.end()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
         sections[title] = text[start:end].strip()
@@ -458,6 +615,10 @@ def _extract_titled_sections(text: str) -> dict[str, str]:
 
 def _clean_section_body(text: str) -> str:
     return text.strip().strip("-").strip()
+
+
+def _compact_multiline_text(text: str) -> str:
+    return " ".join(text.strip().split())
 
 
 def _parse_feature_items(text: str) -> list[str]:

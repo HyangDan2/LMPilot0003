@@ -216,9 +216,8 @@ def summarize_doc_command(
     args: list[str], working_folder: str | Path | None, context: SlashToolContext, progress=None
 ) -> SlashToolResult:
     root = require_working_folder(working_folder)
-    if len(args) > 1:
-        raise SlashToolError("Usage: /summarize_doc [path]")
-    target_path = resolve_workspace_path(root, args[0]) if args else None
+    engineering, target_arg = _parse_summarize_doc_args(args)
+    target_path = resolve_workspace_path(root, target_arg) if target_arg else None
     documents, auto_extract_message = _resolve_documents_for_summary(root, context, target_path, progress)
     if not documents:
         if target_path is not None:
@@ -233,6 +232,7 @@ def summarize_doc_command(
             documents,
             call_model=lambda messages, max_tokens: _chat_summary(client, messages, max_tokens),
             budget=budget,
+            engineering=engineering,
             progress=lambda message: _emit_progress(progress, "status", message),
             cancel_requested=context.cancel_requested,
         )
@@ -246,6 +246,7 @@ def summarize_doc_command(
     summaries_payload = {
         "schema_version": "0.1",
         "summary_method": "hierarchical",
+        "summary_mode": "engineering" if engineering else "standard",
         "run_name": run_name,
         "document_count": len(document_summaries),
         "target_path": _relative_to_root(target_path, root) if target_path is not None else None,
@@ -271,6 +272,7 @@ def summarize_doc_command(
     lines.extend(
         [
             "",
+            f"- mode: {'engineering' if engineering else 'standard'}",
             f"- documents: {len(document_summaries)}",
             f"- blocks: {sum(len(document.blocks) for document in documents)}",
         ]
@@ -279,15 +281,41 @@ def summarize_doc_command(
         lines.append(f"- target_path: {_relative_to_root(target_path, root)}")
     lines.append(f"- output_run: {run_name}")
     lines.append("- workspace_summary_sections:")
-    lines.append(f"  overall_summary: {workspace_summary.overall_summary}")
     lines.append(f"  features: {len(workspace_summary.features)} item(s)")
-    lines.append(f"  next_action: {workspace_summary.next_action}")
+    if workspace_summary.mode == "engineering":
+        lines.append(f"  quantitative_information: {workspace_summary.quantitative_information}")
+        lines.append(f"  recommended_action: {workspace_summary.recommended_action}")
+    else:
+        lines.append(f"  overall_summary: {workspace_summary.overall_summary}")
+        lines.append(f"  next_action: {workspace_summary.next_action}")
     return _result(
         "/summarize_doc",
         "\n".join(lines),
         saved_files=saved_files,
         next_actions=["/workspace_status", "Ask a normal question about the generated summary"],
     )
+
+
+def _parse_summarize_doc_args(args: list[str]) -> tuple[bool, str | None]:
+    engineering = False
+    remaining: list[str] = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--engineering":
+            if index + 1 >= len(args):
+                raise SlashToolError("Usage: /summarize_doc [--engineering True|False] [path]")
+            value = args[index + 1].strip().lower()
+            if value not in {"true", "false"}:
+                raise SlashToolError("Usage: /summarize_doc [--engineering True|False] [path]")
+            engineering = value == "true"
+            index += 2
+            continue
+        remaining.append(arg)
+        index += 1
+    if len(remaining) > 1:
+        raise SlashToolError("Usage: /summarize_doc [--engineering True|False] [path]")
+    return engineering, remaining[0] if remaining else None
 
 
 def _ensure_documents(root: Path, context: SlashToolContext) -> None:

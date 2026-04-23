@@ -87,7 +87,7 @@ SLASH_TOOLS: dict[str, SlashTool] = {
     "/summarize_doc": SlashTool(
         "/summarize_doc",
         "Generate hierarchical LLM-backed summaries from extracted documents.",
-        "/summarize_doc [path]",
+        "/summarize_doc [--engineering True|False] [path]",
         summarize_doc_command,
     ),
 }

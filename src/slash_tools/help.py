@@ -34,10 +34,13 @@ Show which document-pipeline artifacts are available in the attached folder.
 /generate_markdown
 Generate a deterministic markdown report from extracted evidence.
 
-/summarize_doc [PATH]
+/summarize_doc [--engineering True|False] [PATH]
 Generate hierarchical LLM-backed summaries from extracted documents without sending the full raw corpus in one request.
 If PATH is given, summarize only that file inside the attached folder.
 The saved workspace summary is structured into Overall Summary, Features (3 items), and Next Action.
+With --engineering True, the saved summary uses Features, Quantitative Information, and Recommended Action.
+Summary output length is controlled by substantial minimum-detail prompt instructions; token budgets remain bounded safety caps.
+The saved workspace_summary.md formats prose with one sentence per line, including multi-sentence list items.
 
 Normal chat generated-artifact access:
 When a model needs a previous generated output, it can request:
@@ -50,6 +53,7 @@ Examples:
   /extract_single_doc design_review.pptx
   /extract_docs
   /summarize_doc
+  /summarize_doc --engineering True design_review.pptx
   /summarize_doc design_review.pptx
   /generate_markdown
 
@@ -83,8 +87,9 @@ Automatic saved outputs:
 - /generate_markdown saves HD2docpipe/artifacts/generated_report.md or HD2docpipe/artifacts/FILE_SCOPE/generated_report.md
 - /summarize_doc saves HD2docpipe/summaries/RUN_NAME/document_summaries.json
 - /summarize_doc saves HD2docpipe/summaries/RUN_NAME/workspace_summary.md
-- /summarize_doc stores structured workspace_summary fields in document_summaries.json:
-  overall_summary, features, next_action
+- /summarize_doc stores structured workspace_summary fields in document_summaries.json.
+  Standard mode: overall_summary, features, next_action
+  Engineering mode: features, quantitative_information, recommended_action
 
 Summary run naming:
 - Folder-wide summaries use workspace_TIMESTAMP
