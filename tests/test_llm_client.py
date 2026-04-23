@@ -364,7 +364,7 @@ class OpenAICompatibleClientTests(unittest.TestCase):
         self.assertEqual(reasoning_events, [])
         self.assertEqual(len(FakeConnection.requests), 1)
 
-    def test_chat_completion_with_reasoning_fallback_recovers_length_limited_reasoning_only_answer(self) -> None:
+    def test_chat_completion_with_reasoning_fallback_retries_reasoning_only_length_with_reduced_budget(self) -> None:
         FakeConnection.responses.extend(
             [
                 FakeResponse(
@@ -395,20 +395,17 @@ class OpenAICompatibleClientTests(unittest.TestCase):
             ]
         )
         client = self.make_client(
-            OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model")
+            OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model", max_tokens=512)
         )
 
         answer = client.chat_completion_with_reasoning_fallback([{"role": "user", "content": "Summarize"}])
 
         self.assertEqual(answer, "Recovered final answer.")
         self.assertEqual(len(FakeConnection.requests), 2)
-        followup_messages = FakeConnection.requests[1]["body"]["messages"]
-        self.assertEqual(followup_messages[-2]["role"], "assistant")
-        self.assertIn("Analyze the request", followup_messages[-2]["content"])
-        self.assertEqual(followup_messages[-1]["role"], "user")
-        self.assertIn("Continue exactly from the next unfinished point", followup_messages[-1]["content"])
+        self.assertEqual(FakeConnection.requests[0]["body"]["max_tokens"], 512)
+        self.assertEqual(FakeConnection.requests[1]["body"]["max_tokens"], 256)
 
-    def test_chat_completion_with_reasoning_fallback_recovers_length_limited_answer(self) -> None:
+    def test_chat_completion_with_reasoning_fallback_retries_length_with_reduced_budget(self) -> None:
         FakeConnection.responses.extend(
             [
                 FakeResponse(
@@ -436,21 +433,17 @@ class OpenAICompatibleClientTests(unittest.TestCase):
             ]
         )
         client = self.make_client(
-            OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model")
+            OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model", max_tokens=512)
         )
 
         answer = client.chat_completion_with_reasoning_fallback([{"role": "user", "content": "Explain"}])
 
-        self.assertEqual(answer, "Part one ends here.\n\nPart two continues.")
+        self.assertEqual(answer, "Part two continues.")
         self.assertEqual(len(FakeConnection.requests), 2)
-        followup_messages = FakeConnection.requests[1]["body"]["messages"]
-        self.assertEqual(followup_messages[-2]["role"], "assistant")
-        self.assertIn("Part one ends here.", followup_messages[-2]["content"])
-        self.assertEqual(followup_messages[-1]["role"], "user")
-        self.assertIn("Continue exactly from the next unfinished point", followup_messages[-1]["content"])
+        self.assertEqual(FakeConnection.requests[0]["body"]["max_tokens"], 512)
+        self.assertEqual(FakeConnection.requests[1]["body"]["max_tokens"], 256)
 
-    def test_chat_completion_with_reasoning_fallback_shortens_long_partial_before_recovery(self) -> None:
-        long_text = ("A" * 900) + "\n\n" + ("B" * 900)
+    def test_chat_completion_with_reasoning_fallback_recursively_reduces_budget(self) -> None:
         FakeConnection.responses.extend(
             [
                 FakeResponse(
@@ -459,7 +452,18 @@ class OpenAICompatibleClientTests(unittest.TestCase):
                         "choices": [
                             {
                                 "finish_reason": "length",
-                                "message": {"content": long_text},
+                                "message": {"content": "Attempt 1"},
+                            }
+                        ]
+                    },
+                ),
+                FakeResponse(
+                    200,
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "length",
+                                "message": {"content": "Attempt 2"},
                             }
                         ]
                     },
@@ -470,7 +474,7 @@ class OpenAICompatibleClientTests(unittest.TestCase):
                         "choices": [
                             {
                                 "finish_reason": "stop",
-                                "message": {"content": "Remaining details."},
+                                "message": {"content": "Compact final answer."},
                             }
                         ]
                     },
@@ -483,14 +487,12 @@ class OpenAICompatibleClientTests(unittest.TestCase):
 
         answer = client.chat_completion_with_reasoning_fallback([{"role": "user", "content": "Explain"}])
 
-        self.assertTrue(answer.endswith("Remaining details."))
-        self.assertEqual(len(FakeConnection.requests), 2)
-        followup_request = FakeConnection.requests[1]["body"]
-        assistant_context = followup_request["messages"][-2]["content"]
-        self.assertLessEqual(len(assistant_context), 1600)
-        self.assertNotIn("A" * 900, assistant_context)
-        self.assertIn("B" * 900, assistant_context)
-        self.assertIn("Continue after this exact tail excerpt", followup_request["messages"][-1]["content"])
+        self.assertEqual(answer, "Compact final answer.")
+        self.assertEqual(len(FakeConnection.requests), 3)
+        self.assertEqual(
+            [request["body"]["max_tokens"] for request in FakeConnection.requests],
+            [512, 256, 128],
+        )
 
     def test_chat_completion_tries_fallbacks_after_empty_content(self) -> None:
         FakeConnection.responses.append(
@@ -542,7 +544,7 @@ class OpenAICompatibleClientTests(unittest.TestCase):
         self.assertIn("finish_reason", message)
         self.assertIn("image", message)
 
-    def test_stream_chat_completion_appends_length_recovery_continuation(self) -> None:
+    def test_stream_chat_completion_replaces_output_after_length_retry(self) -> None:
         FakeConnection.responses.extend(
             [
                 FakeStreamingResponse(
@@ -567,7 +569,7 @@ class OpenAICompatibleClientTests(unittest.TestCase):
             ]
         )
         client = self.make_client(
-            OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model")
+            OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model", max_tokens=512)
         )
 
         chunks = list(client.stream_chat_completion([{"role": "user", "content": "Explain"}]))
@@ -577,12 +579,13 @@ class OpenAICompatibleClientTests(unittest.TestCase):
             [
                 ("final", "Part one "),
                 ("final", "ends here."),
-                ("final", "Part two continues."),
+                ("replace", "Part two continues."),
             ],
         )
         self.assertEqual(len(FakeConnection.requests), 2)
+        self.assertEqual(FakeConnection.requests[1]["body"]["max_tokens"], 256)
 
-    def test_stream_chat_completion_recovers_length_limited_reasoning_only_answer(self) -> None:
+    def test_stream_chat_completion_retries_reasoning_only_length_with_reduced_budget(self) -> None:
         FakeConnection.responses.extend(
             [
                 FakeStreamingResponse(
@@ -607,7 +610,7 @@ class OpenAICompatibleClientTests(unittest.TestCase):
             ]
         )
         client = self.make_client(
-            OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model")
+            OpenAIConnectionSettings(base_url="http://localhost:1234/v1", model="local-model", max_tokens=512)
         )
 
         chunks = list(client.stream_chat_completion([{"role": "user", "content": "Explain"}]))
@@ -616,10 +619,11 @@ class OpenAICompatibleClientTests(unittest.TestCase):
             [(chunk.kind, chunk.text) for chunk in chunks],
             [
                 ("reasoning", ""),
-                ("final", "Recovered final answer."),
+                ("replace", "Recovered final answer."),
             ],
         )
         self.assertEqual(len(FakeConnection.requests), 2)
+        self.assertEqual(FakeConnection.requests[1]["body"]["max_tokens"], 256)
 
     def test_list_models_uses_base_url_prefix(self) -> None:
         FakeConnection.responses.append(

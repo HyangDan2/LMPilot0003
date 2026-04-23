@@ -42,7 +42,7 @@ With --engineering True, the saved summary uses Features, Quantitative Informati
 Summary output length is controlled by substantial minimum-detail prompt instructions; token budgets remain bounded safety caps.
 The saved workspace_summary.md formats prose with one sentence per line, including multi-sentence list items.
 If a reasoning-model backend returns reasoning without final content, streamed reasoning stays internal, the chat view shows only a minimal processing placeholder, and the raw backend JSON is pretty-printed directly instead of retrying for a final answer.
-If the backend reports `finish_reason: "length"`, the client treats that as the first recovery trigger even when final assistant `content` is missing and only reasoning text is available. It makes one hard-coded continuation request using a shortened in-code excerpt plus the most recent exact tail, without any extra summary-generation call.
+If the backend reports `finish_reason: "length"`, the client retries the same request with a progressively smaller output token budget, even when final assistant `content` is missing and only reasoning text is available. This path does not use continuation prompts or extra summary-generation calls.
 
 /summarize_docs [--engineering True|False]
 Run /summarize_doc-style single-file summaries sequentially for every supported document in the attached folder.

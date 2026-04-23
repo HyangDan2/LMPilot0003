@@ -116,7 +116,9 @@ class ChatWorker(QObject):
             if callable(stream_answer):
                 answer_parts: list[str] = []
                 for chunk in stream_answer(self.prompt_text):
-                    if chunk.kind == 'final':
+                    if chunk.kind == 'replace':
+                        answer_parts = [chunk.text]
+                    elif chunk.kind == 'final':
                         answer_parts.append(chunk.text)
                     self.chunk.emit(self.session_id, chunk.kind, chunk.text)
                 self.finished.emit(self.session_id, ''.join(answer_parts), True)
@@ -928,6 +930,14 @@ class MainWindow(QMainWindow):
             if self.current_session_id == session_id:
                 self._show_reasoning_placeholder()
                 self._set_status('Analyzing response...')
+            return
+        if kind == 'replace' and chunk:
+            generation.was_streamed = True
+            generation.partial_answer = [chunk]
+            if self.current_session_id == session_id:
+                self._clear_reasoning_placeholder()
+                self._replace_stream_block_with_markdown('Assistant', chunk)
+                self._set_status('Regenerating with reduced output budget...')
             return
         if kind != 'final' or not chunk:
             return
