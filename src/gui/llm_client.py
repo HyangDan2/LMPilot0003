@@ -16,18 +16,11 @@ FINAL_TEXT_FIELD_FALLBACKS = ("text", "output_text")
 CHOICE_FINAL_TEXT_FIELDS = ("content", "output_text", "response", "completion")
 REASONING_TEXT_FIELDS = ("reasoning", "reasoning_content")
 LENGTH_RECOVERY_MAX_ATTEMPTS = 1
-LENGTH_RECOVERY_SUMMARY_CHAR_THRESHOLD = 1600
-LENGTH_RECOVERY_SUMMARY_MAX_TOKENS = 192
-LENGTH_RECOVERY_TAIL_CHARS = 800
-LENGTH_RECOVERY_SUMMARY_PROMPT = (
-    "Compress the assistant draft below into a compact coverage note. "
-    "Preserve only what has already been answered, keep the original order, "
-    "and do not add any new information."
-)
+LENGTH_RECOVERY_CONTEXT_CHARS = 1600
+LENGTH_RECOVERY_TAIL_CHARS = 1000
 LENGTH_RECOVERY_CONTINUE_PROMPT = (
-    "Your previous answer was cut off because of the token limit. "
-    "Continue from the next missing point only. "
-    "Do not restart, do not repeat completed sections, and do not add meta commentary."
+    "Continue exactly from the next unfinished point. "
+    "Do not restart. Do not repeat completed text."
 )
 
 
@@ -489,40 +482,45 @@ class OpenAICompatibleClient:
         partial_text: str,
     ) -> list[dict[str, Any]]:
         followup_messages = [dict(message) for message in messages]
-        recovery_context = self._summarize_for_length_recovery(partial_text)
-        followup_messages.append({"role": "assistant", "content": partial_text[-LENGTH_RECOVERY_TAIL_CHARS:]})
+        recovery_context = self._shorten_partial_for_length_recovery(partial_text)
+        tail_excerpt = partial_text[-LENGTH_RECOVERY_TAIL_CHARS:]
+        followup_messages.append({"role": "assistant", "content": recovery_context})
         followup_messages.append(
             {
                 "role": "user",
                 "content": (
                     f"{LENGTH_RECOVERY_CONTINUE_PROMPT}\n\n"
-                    f"Already covered summary:\n{recovery_context}\n\n"
-                    f"Last exact excerpt:\n{partial_text[-LENGTH_RECOVERY_TAIL_CHARS:]}"
+                    f"Continue after this exact tail excerpt:\n{tail_excerpt}"
                 ),
             }
         )
         return followup_messages
 
-    def _summarize_for_length_recovery(self, partial_text: str) -> str:
+    @staticmethod
+    def _shorten_partial_for_length_recovery(partial_text: str) -> str:
         compact_source = partial_text.strip()
-        if len(compact_source) <= LENGTH_RECOVERY_SUMMARY_CHAR_THRESHOLD:
+        if len(compact_source) <= LENGTH_RECOVERY_CONTEXT_CHARS:
             return compact_source
 
-        original_max_tokens = self.settings.max_tokens
-        try:
-            self.settings.max_tokens = min(original_max_tokens, LENGTH_RECOVERY_SUMMARY_MAX_TOKENS)
-            summary_result = self._chat_completion_once(
-                [
-                    {"role": "system", "content": LENGTH_RECOVERY_SUMMARY_PROMPT},
-                    {"role": "user", "content": compact_source},
-                ]
-            )
-        finally:
-            self.settings.max_tokens = original_max_tokens
-
-        if summary_result.reasoning_only or not summary_result.text.strip():
-            return compact_source[-LENGTH_RECOVERY_SUMMARY_CHAR_THRESHOLD:]
-        return summary_result.text.strip()
+        paragraphs = [part.strip() for part in compact_source.split("\n\n") if part.strip()]
+        selected: list[str] = []
+        total = 0
+        for paragraph in reversed(paragraphs):
+            addition = len(paragraph) + (2 if selected else 0)
+            if selected and total + addition > LENGTH_RECOVERY_CONTEXT_CHARS:
+                break
+            if not selected and len(paragraph) >= LENGTH_RECOVERY_CONTEXT_CHARS:
+                return paragraph[-LENGTH_RECOVERY_CONTEXT_CHARS:]
+            selected.append(paragraph)
+            total += addition
+            if total >= LENGTH_RECOVERY_CONTEXT_CHARS:
+                break
+        if selected:
+            shortened = "\n\n".join(reversed(selected))
+            if len(shortened) <= LENGTH_RECOVERY_CONTEXT_CHARS:
+                return shortened
+            return shortened[-LENGTH_RECOVERY_CONTEXT_CHARS:]
+        return compact_source[-LENGTH_RECOVERY_CONTEXT_CHARS:]
 
     @staticmethod
     def _remove_duplicate_prefix(new_text: str, existing_text: str) -> str:

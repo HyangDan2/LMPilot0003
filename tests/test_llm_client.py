@@ -403,10 +403,10 @@ class OpenAICompatibleClientTests(unittest.TestCase):
         self.assertEqual(followup_messages[-2]["role"], "assistant")
         self.assertIn("Part one ends here.", followup_messages[-2]["content"])
         self.assertEqual(followup_messages[-1]["role"], "user")
-        self.assertIn("cut off because of the token limit", followup_messages[-1]["content"])
+        self.assertIn("Continue exactly from the next unfinished point", followup_messages[-1]["content"])
 
-    def test_chat_completion_with_reasoning_fallback_summarizes_long_partial_before_recovery(self) -> None:
-        long_text = "A" * 1800
+    def test_chat_completion_with_reasoning_fallback_shortens_long_partial_before_recovery(self) -> None:
+        long_text = ("A" * 900) + "\n\n" + ("B" * 900)
         FakeConnection.responses.extend(
             [
                 FakeResponse(
@@ -416,17 +416,6 @@ class OpenAICompatibleClientTests(unittest.TestCase):
                             {
                                 "finish_reason": "length",
                                 "message": {"content": long_text},
-                            }
-                        ]
-                    },
-                ),
-                FakeResponse(
-                    200,
-                    {
-                        "choices": [
-                            {
-                                "finish_reason": "stop",
-                                "message": {"content": "Covered topics summary"},
                             }
                         ]
                     },
@@ -451,12 +440,13 @@ class OpenAICompatibleClientTests(unittest.TestCase):
         answer = client.chat_completion_with_reasoning_fallback([{"role": "user", "content": "Explain"}])
 
         self.assertTrue(answer.endswith("Remaining details."))
-        self.assertEqual(len(FakeConnection.requests), 3)
-        summary_request = FakeConnection.requests[1]["body"]
-        self.assertEqual(summary_request["messages"][0]["role"], "system")
-        self.assertIn("Compress the assistant draft", summary_request["messages"][0]["content"])
-        followup_request = FakeConnection.requests[2]["body"]
-        self.assertIn("Covered topics summary", followup_request["messages"][-1]["content"])
+        self.assertEqual(len(FakeConnection.requests), 2)
+        followup_request = FakeConnection.requests[1]["body"]
+        assistant_context = followup_request["messages"][-2]["content"]
+        self.assertLessEqual(len(assistant_context), 1600)
+        self.assertNotIn("A" * 900, assistant_context)
+        self.assertIn("B" * 900, assistant_context)
+        self.assertIn("Continue after this exact tail excerpt", followup_request["messages"][-1]["content"])
 
     def test_chat_completion_tries_fallbacks_after_empty_content(self) -> None:
         FakeConnection.responses.append(
